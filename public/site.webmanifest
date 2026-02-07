@@ -1,0 +1,16 @@
+{
+    "name": "IB EconGraph AI",
+    "short_name": "EconGraph",
+    "description": "Free and open-source AI-powered economics diagram editor built for IB students and educators.",
+    "icons": [
+        {
+            "src": "/favicon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
+            "purpose": "any"
+        }
+    ],
+    "theme_color": "#2563eb",
+    "background_color": "#ffffff",
+    "display": "standalone"
+}
