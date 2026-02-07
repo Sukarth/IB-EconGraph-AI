@@ -15,6 +15,21 @@ export function usePortalTooltip(options: UsePortalTooltipOptions = {}) {
     const tooltipTextRef = React.useRef<HTMLDivElement>(null);
     const showTimeout = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const currentPlacement = React.useRef<string>(defaultPlacement);
+    const [mounted, setMounted] = React.useState(false);
+    const portalTargetRef = React.useRef<HTMLElement | null>(null);
+
+    React.useEffect(() => {
+        setMounted(true);
+        portalTargetRef.current = document.body;
+        return () => {
+            if (showTimeout.current) {
+                clearTimeout(showTimeout.current);
+                showTimeout.current = null;
+            }
+            setMounted(false);
+            portalTargetRef.current = null;
+        };
+    }, []);
 
     const positionTooltip = (anchor: HTMLElement, placement: string) => {
         const el = tooltipRef.current;
@@ -90,8 +105,9 @@ export function usePortalTooltip(options: UsePortalTooltipOptions = {}) {
         if (el) el.style.opacity = '0';
     };
 
-    const TooltipPortal = () =>
-        createPortal(
+    const TooltipPortal = React.useCallback(() => {
+        if (!mounted || !portalTargetRef.current) return null;
+        return createPortal(
             <div
                 ref={tooltipRef}
                 className="fixed z-[9999] pointer-events-none"
@@ -108,8 +124,9 @@ export function usePortalTooltip(options: UsePortalTooltipOptions = {}) {
                     className="px-2.5 py-2.5 bg-gray-700 text-white text-xs rounded-xl whitespace-pre-wrap shadow-lg"
                 />
             </div>,
-            document.body
+            portalTargetRef.current
         );
+    }, [mounted]);
 
     return { showTooltip, hideTooltip, TooltipPortal };
 }

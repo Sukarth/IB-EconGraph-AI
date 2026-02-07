@@ -2,6 +2,7 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { DiagramData } from "../types";
 
 const STORAGE_KEY = 'econgraph_api_key';
+const MODEL_STORAGE_KEY = 'econgraph_selected_model';
 
 // Simple obfuscation to avoid plain-text keys in localStorage.
 // This is NOT encryption — true encryption is impossible when the
@@ -42,6 +43,61 @@ export function hasApiKey(): boolean {
 
 export function clearApiKey(): void {
   localStorage.removeItem(STORAGE_KEY);
+}
+
+// Model management
+export function saveSelectedModel(modelName: string): void {
+  localStorage.setItem(MODEL_STORAGE_KEY, modelName);
+}
+
+export function getSelectedModel(): string {
+  return localStorage.getItem(MODEL_STORAGE_KEY) || 'gemini-2.5-flash';
+}
+
+export function clearSelectedModel(): void {
+  localStorage.removeItem(MODEL_STORAGE_KEY);
+}
+
+export interface ModelInfo {
+  name: string;
+  displayName: string;
+  description?: string;
+  supportedGenerationMethods?: string[];
+}
+
+export async function fetchAvailableModels(): Promise<ModelInfo[]> {
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    throw new Error("API key not configured");
+  }
+
+  try {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch models: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Filter for models that support generateContent
+    const models: ModelInfo[] = (data.models || [])
+      .filter((model: any) =>
+        model.supportedGenerationMethods?.includes('generateContent')
+      )
+      .map((model: any) => ({
+        name: model.name.replace('models/', ''),
+        displayName: model.displayName || model.name,
+        description: model.description,
+        supportedGenerationMethods: model.supportedGenerationMethods
+      }))
+      .sort((a: ModelInfo, b: ModelInfo) => a.displayName.localeCompare(b.displayName));
+
+    return models;
+  } catch (error) {
+    console.error("Error fetching models:", error);
+    throw error;
+  }
 }
 
 const diagramSchema: Schema = {
@@ -144,7 +200,7 @@ export async function generateDiagramData(prompt: string, history: string[] = []
   }
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = "gemini-2.5-flash";
+  const model = getSelectedModel();
 
   // Convert history to a text context block
   const historyContext = history.length > 0

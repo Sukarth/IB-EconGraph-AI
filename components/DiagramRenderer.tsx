@@ -2069,6 +2069,7 @@ const DiagramRenderer: React.FC<DiagramRendererProps> = ({
                             const cy = mapY(pt.y);
                             const labelPos = getLabelPos(pt, pt.labelPosition);
                             const isSelected = isElementSelected('annotation', i);
+                            const pointKey = `${pt.x.toFixed(2)},${pt.y.toFixed(2)}`;
 
                             return (
                                 <g
@@ -2076,10 +2077,6 @@ const DiagramRenderer: React.FC<DiagramRendererProps> = ({
                                     className={activeTool === 'eraser' ? 'cursor-pointer' : ''}
                                     onClick={(e) => {
                                         handleElementClick('annotation', i, e);
-                                        if (activeTool === 'select' || activeTool === 'boxSelect') {
-                                            e.stopPropagation();
-                                            toggleElementSelection('annotation', i, e.ctrlKey || e.metaKey);
-                                        }
                                     }}
                                 >
                                     {pt.showDottedLines && (
@@ -2093,7 +2090,14 @@ const DiagramRenderer: React.FC<DiagramRendererProps> = ({
                                         <circle cx={cx} cy={cy} r="10" fill="none" stroke="rgba(59, 130, 246, 0.4)" strokeWidth="3" className="pointer-events-none" />
                                     )}
                                     {/* Larger invisible hit area for easier clicking/dragging - UPDATED based on request */}
-                                    <circle cx={cx} cy={cy} r="20" fill="transparent" className="cursor-pointer" />
+                                    <circle
+                                        cx={cx}
+                                        cy={cy}
+                                        r="20"
+                                        fill="transparent"
+                                        className={(activeTool === 'select' || activeTool === 'boxSelect') ? 'cursor-move' : 'cursor-pointer'}
+                                        onMouseDown={(e) => handlePointMouseDown(e, pointKey)}
+                                    />
                                     <circle cx={cx} cy={cy} r="5" fill={pt.color || "#111827"} stroke="white" strokeWidth="2" className="pointer-events-none" />
                                     <FormattedText
                                         x={labelPos.x}

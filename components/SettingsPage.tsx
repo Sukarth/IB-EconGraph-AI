@@ -1,9 +1,27 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
     ChevronLeft, Key, Eye, EyeOff, Check, AlertTriangle,
-    Download, Upload, BarChart2, Trash2, ExternalLink
+    Download, Upload, BarChart2, Trash2, ExternalLink, Cpu, RefreshCw
 } from 'lucide-react';
-import { getApiKey, saveApiKey, hasApiKey } from '../services/gemini';
+import {
+    getApiKey as getGeminiApiKey,
+    saveApiKey as saveGeminiApiKey,
+    hasApiKey as hasGeminiApiKey,
+    fetchAvailableModels,
+    ModelInfo,
+    getSelectedModel as getGeminiSelectedModel,
+    saveSelectedModel as saveGeminiSelectedModel
+} from '../services/gemini';
+import {
+    getOpenRouterApiKey,
+    hasOpenRouterApiKey,
+    saveOpenRouterApiKey,
+    getOpenRouterSelectedModel,
+    saveOpenRouterSelectedModel,
+    fetchOpenRouterModels,
+    type OpenRouterModelInfo,
+} from '../services/openrouter';
+import { AIProvider, getAIProvider, setAIProvider } from '../services/aiProvider';
 import { Graph, Project } from '../types';
 import { ConfirmModal } from './Modal';
 
@@ -34,6 +52,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     projects,
     onImportData,
 }) => {
+    const [provider, setProviderState] = useState<AIProvider>(() => getAIProvider());
     const [apiKey, setApiKey] = useState('');
     const [showKey, setShowKey] = useState(false);
     const [saved, setSaved] = useState(false);
@@ -43,25 +62,134 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const [importConfirmOpen, setImportConfirmOpen] = useState(false);
     const [pendingImportData, setPendingImportData] = useState<{ graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+    const [selectedModel, setSelectedModel] = useState<string>('');
+    const [loadingModels, setLoadingModels] = useState(false);
+    const [modelsFetched, setModelsFetched] = useState(false);
+    const [modelsError, setModelsError] = useState<string | null>(null);
+    const [openRouterModels, setOpenRouterModels] = useState<OpenRouterModelInfo[]>([]);
+    const [openRouterModelsFetched, setOpenRouterModelsFetched] = useState(false);
+    const [openRouterModelsLoading, setOpenRouterModelsLoading] = useState(false);
+    const [openRouterModelsError, setOpenRouterModelsError] = useState<string | null>(null);
+
+    const loadProviderState = (p: AIProvider) => {
+        const existingKey = p === 'openrouter' ? getOpenRouterApiKey() : getGeminiApiKey();
+        if (existingKey) {
+            setApiKey(existingKey);
+            setKeyConfigured(true);
+        } else {
+            setApiKey('');
+            setKeyConfigured(false);
+        }
+
+        const model = p === 'openrouter' ? getOpenRouterSelectedModel() : getGeminiSelectedModel();
+        setSelectedModel(model);
+
+        // Reset model-fetch UI when switching providers
+        setAvailableModels([]);
+        setModelsFetched(false);
+        setModelsError(null);
+        setLoadingModels(false);
+        setOpenRouterModels([]);
+        setOpenRouterModelsFetched(false);
+        setOpenRouterModelsError(null);
+        setOpenRouterModelsLoading(false);
+    };
 
     useEffect(() => {
-        const existing = getApiKey();
-        if (existing) {
-            setApiKey(existing);
-            setKeyConfigured(true);
-        }
+        const p = getAIProvider();
+        setProviderState(p);
+        loadProviderState(p);
     }, []);
 
+    const handleProviderChange = (p: AIProvider) => {
+        setAIProvider(p);
+        setProviderState(p);
+        setSaved(false);
+        setShowKey(false);
+        loadProviderState(p);
+    };
+
+    const handleFetchGeminiModels = async () => {
+        if (!keyConfigured) {
+            setModelsError('Please save your API key first');
+            return;
+        }
+
+        setLoadingModels(true);
+        setModelsError(null);
+        try {
+            const models = await fetchAvailableModels();
+            setAvailableModels(models);
+            setModelsFetched(true);
+
+            // If current selected model is not in the list, select the first one
+            if (models.length > 0 && !models.some(m => m.name === selectedModel)) {
+                const firstModel = models[0].name;
+                setSelectedModel(firstModel);
+                saveGeminiSelectedModel(firstModel);
+            }
+        } catch (error) {
+            setModelsError(error instanceof Error ? error.message : 'Failed to fetch models');
+        } finally {
+            setLoadingModels(false);
+        }
+    };
+
+    const handleFetchOpenRouterModels = async () => {
+        if (!keyConfigured) {
+            setOpenRouterModelsError('Please save your API key first');
+            return;
+        }
+
+        setOpenRouterModelsLoading(true);
+        setOpenRouterModelsError(null);
+        try {
+            const models = await fetchOpenRouterModels();
+            setOpenRouterModels(models);
+            setOpenRouterModelsFetched(true);
+
+            // If current selected model is not in the list, select the first one
+            if (models.length > 0 && !models.some(m => m.id === selectedModel)) {
+                const firstModel = models[0].id;
+                setSelectedModel(firstModel);
+                saveOpenRouterSelectedModel(firstModel);
+            }
+        } catch (error) {
+            setOpenRouterModelsError(error instanceof Error ? error.message : 'Failed to fetch models');
+        } finally {
+            setOpenRouterModelsLoading(false);
+        }
+    };
+
+    const handleModelChange = (modelName: string) => {
+        setSelectedModel(modelName);
+        if (provider === 'openrouter') {
+            saveOpenRouterSelectedModel(modelName);
+        } else {
+            saveGeminiSelectedModel(modelName);
+        }
+    };
+
     const handleSaveKey = () => {
-        saveApiKey(apiKey);
-        setKeyConfigured(apiKey.trim().length > 0);
+        if (provider === 'openrouter') {
+            saveOpenRouterApiKey(apiKey);
+            setKeyConfigured(hasOpenRouterApiKey());
+        } else {
+            saveGeminiApiKey(apiKey);
+            setKeyConfigured(hasGeminiApiKey());
+        }
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
     };
 
     const handleClearKey = () => {
         setApiKey('');
-        saveApiKey('');
+        if (provider === 'openrouter') {
+            saveOpenRouterApiKey('');
+        } else {
+            saveGeminiApiKey('');
+        }
         setKeyConfigured(false);
     };
 
@@ -218,13 +346,27 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 <Key className="w-5 h-5 text-amber-600" />
                             </div>
                             <div>
-                                <h2 className="font-semibold text-gray-900 text-lg">Google AI Studio API Key</h2>
-                                <p className="text-sm text-gray-500">Required for AI diagram generation</p>
+                                <h2 className="font-semibold text-gray-900 text-lg">AI Provider & API Key</h2>
+                                <p className="text-sm text-gray-500">Select a provider and configure the key used for diagram generation</p>
                             </div>
                         </div>
                     </div>
 
                     <div className="p-6 space-y-4">
+                        {/* Provider selector */}
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                                Provider
+                            </label>
+                            <select
+                                value={provider}
+                                onChange={(e) => handleProviderChange(e.target.value as AIProvider)}
+                                className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm bg-gray-50 transition-all"
+                            >
+                                <option value="gemini">Google AI Studio (Gemini)</option>
+                                <option value="openrouter">OpenRouter</option>
+                            </select>
+                        </div>
                         {/* Status indicator */}
                         <div className={`flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg ${keyConfigured
                             ? 'bg-green-50 text-green-700'
@@ -246,7 +388,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         {/* Key input */}
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                                API Key
+                                {provider === 'openrouter' ? 'OpenRouter API Key' : 'Google AI Studio API Key'}
                             </label>
                             <div className="relative">
                                 <input
@@ -266,7 +408,9 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                             setShowKey(true);
                                         }
                                     }}
-                                    placeholder="Enter your Google AI Studio API key..."
+                                    placeholder={provider === 'openrouter'
+                                        ? 'Enter your OpenRouter API key...'
+                                        : 'Enter your Google AI Studio API key...'}
                                     className="w-full pr-24 pl-4 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm font-mono bg-gray-50 transition-all"
                                 />
                                 <button
@@ -278,7 +422,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 </button>
                             </div>
                             <p className="text-xs text-gray-400 mt-1.5">
-                                Your key is stored locally in your browser and never sent to any server other than Google's API.
+                                Your key is stored locally in your browser and only sent to the selected provider when you generate diagrams.
                             </p>
                         </div>
 
@@ -312,15 +456,211 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         {/* Help link */}
                         <div className="pt-2 border-t border-gray-100">
                             <a
-                                href="https://aistudio.google.com/apikey"
+                                href={provider === 'openrouter' ? 'https://openrouter.ai/keys' : 'https://aistudio.google.com/apikey'}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium"
                             >
-                                Get a free API key from Google AI Studio
+                                {provider === 'openrouter'
+                                    ? 'Get an API key from OpenRouter'
+                                    : 'Get a free API key from Google AI Studio'}
                                 <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                         </div>
+                    </div>
+                </section>
+
+                {/* Model Selection Section */}
+                <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                    <div className="p-6 border-b border-gray-100">
+                        <div className="flex items-center gap-3 mb-1">
+                            <div className="w-9 h-9 bg-purple-100 rounded-lg flex items-center justify-center">
+                                <Cpu className="w-5 h-5 text-purple-600" />
+                            </div>
+                            <div>
+                                <h2 className="font-semibold text-gray-900 text-lg">AI Model Selection</h2>
+                                <p className="text-sm text-gray-500">
+                                    {provider === 'openrouter'
+                                        ? 'Set the OpenRouter model ID (e.g. provider/model)'
+                                        : 'Choose which Gemini model to use for generation'}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="p-6 space-y-4">
+                        {!keyConfigured ? (
+                            <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-amber-50 text-amber-700">
+                                <AlertTriangle className="w-4 h-4" />
+                                Configure your API key first to select a model
+                            </div>
+                        ) : (
+                            <>
+                                {provider === 'openrouter' ? (
+                                    <div>
+                                        {/* Fetch Models Button */}
+                                        {(!openRouterModelsFetched || openRouterModels.length === 0) && (
+                                            <button
+                                                onClick={handleFetchOpenRouterModels}
+                                                disabled={openRouterModelsLoading}
+                                                className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm w-full justify-center"
+                                            >
+                                                {openRouterModelsLoading ? (
+                                                    <>
+                                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                                        Fetching Models...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <RefreshCw className="w-4 h-4" />
+                                                        Fetch OpenRouter Models
+                                                    </>
+                                                )}
+                                            </button>
+                                        )}
+
+                                        {/* Model Selector */}
+                                        {openRouterModelsFetched && openRouterModels.length > 0 && (
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                                                    Selected Model
+                                                </label>
+                                                <div className="flex items-center gap-2">
+                                                    <select
+                                                        value={selectedModel}
+                                                        onChange={(e) => handleModelChange(e.target.value)}
+                                                        className="flex-1 px-4 py-3 rounded-lg border border-gray-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-100 outline-none text-sm bg-gray-50 transition-all"
+                                                    >
+                                                        {openRouterModels.map((model) => (
+                                                            <option key={model.id} value={model.id}>
+                                                                {model.name}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    <button
+                                                        onClick={handleFetchOpenRouterModels}
+                                                        disabled={openRouterModelsLoading}
+                                                        className="p-3 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                                                        title="Refresh models"
+                                                    >
+                                                        <RefreshCw className={`w-4 h-4 ${openRouterModelsLoading ? 'animate-spin' : ''}`} />
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-gray-400 mt-1.5">
+                                                    {openRouterModels.length} model{openRouterModels.length !== 1 ? 's' : ''}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Error Message */}
+                                        {openRouterModelsError && (
+                                            <div className="flex items-start gap-2 text-sm p-3 rounded-lg bg-red-50 text-red-700">
+                                                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                                                {openRouterModelsError}
+                                            </div>
+                                        )}
+
+                                        {/* Empty State */}
+                                        {openRouterModelsFetched && openRouterModels.length === 0 && !openRouterModelsError && (
+                                            <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-amber-50 text-amber-700">
+                                                <AlertTriangle className="w-4 h-4" />
+                                                No structured-output models found. You can still enter a model ID manually.
+                                            </div>
+                                        )}
+
+                                        {/* Current Model Display (fallback when not fetched) */}
+                                        {(!openRouterModelsFetched || openRouterModels.length === 0) && selectedModel && (
+                                            <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-purple-50 text-purple-700">
+                                                <Cpu className="w-4 h-4" />
+                                                Currently using: {selectedModel}
+                                            </div>
+                                        )}
+
+                                        {/* Manual model ID input (when no models fetched) */}
+                                        {(!openRouterModelsFetched || openRouterModels.length === 0) && (
+                                            <input
+                                                value={selectedModel}
+                                                onChange={(e) => handleModelChange(e.target.value)}
+                                                placeholder="provider/model"
+                                                className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-100 outline-none text-sm bg-gray-50 transition-all mt-2"
+                                            />
+                                        )}
+                                    </div>
+                                ) : (
+                                    <>
+                                        {/* Fetch Models Button */}
+                                        {!modelsFetched && (
+                                            <button
+                                                onClick={handleFetchGeminiModels}
+                                                disabled={loadingModels}
+                                                className="flex items-center gap-2 px-4 py-2.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors text-sm font-medium shadow-sm w-full justify-center"
+                                            >
+                                                {loadingModels ? (
+                                                    <>
+                                                        <RefreshCw className="w-4 h-4 animate-spin" />
+                                                        Fetching Models...
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        <RefreshCw className="w-4 h-4" />
+                                                        Fetch Available Models
+                                                    </>
+                                                )}
+                                            </button>
+                                        )}
+
+                                        {/* Model Selector */}
+                                        {modelsFetched && availableModels.length > 0 && (
+                                            <div>
+                                                <label className="block text-sm font-medium text-gray-700 mb-1.5">
+                                                    Selected Model
+                                                </label>
+                                                <div className="flex items-center gap-2">
+                                                    <select
+                                                        value={selectedModel}
+                                                        onChange={(e) => handleModelChange(e.target.value)}
+                                                        className="flex-1 px-4 py-3 rounded-lg border border-gray-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-100 outline-none text-sm bg-gray-50 transition-all"
+                                                    >
+                                                        {availableModels.map((model) => (
+                                                            <option key={model.name} value={model.name}>
+                                                                {model.displayName}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                    <button
+                                                        onClick={handleFetchGeminiModels}
+                                                        disabled={loadingModels}
+                                                        className="p-3 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                                                        title="Refresh models"
+                                                    >
+                                                        <RefreshCw className={`w-4 h-4 ${loadingModels ? 'animate-spin' : ''}`} />
+                                                    </button>
+                                                </div>
+                                                <p className="text-xs text-gray-400 mt-1.5">
+                                                    {availableModels.length} model{availableModels.length !== 1 ? 's' : ''} available
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Error Message */}
+                                        {modelsError && (
+                                            <div className="flex items-start gap-2 text-sm p-3 rounded-lg bg-red-50 text-red-700">
+                                                <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                                                {modelsError}
+                                            </div>
+                                        )}
+
+                                        {/* Current Model Display */}
+                                        {!modelsFetched && selectedModel && (
+                                            <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-purple-50 text-purple-700">
+                                                <Cpu className="w-4 h-4" />
+                                                Currently using: {selectedModel}
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </>
+                        )}
                     </div>
                 </section>
 

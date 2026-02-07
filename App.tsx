@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { generateDiagramData, hasApiKey } from './services/gemini';
+import { generateDiagramData, hasApiKey } from './services/ai';
 import DiagramRenderer from './components/DiagramRenderer';
 import LandingPage from './components/LandingPage';
 import HomePage from './components/HomePage';
@@ -43,6 +43,8 @@ const DEFAULT_STANDARD_COLORS = [
   '#71717a', // Zinc 500
   '#000000', // Black
 ];
+
+const DEFAULT_SPECIAL_COLORS = ['#648d49', '#ae0f0f'];
 
 const PROJECT_COLORS = [
   '#3b82f6', // Blue
@@ -97,7 +99,7 @@ export default function App() {
   });
 
   // Color State
-  const [specialColors, setSpecialColors] = useState<string[]>(['#648d49', '#ae0f0f']);
+  const [specialColors, setSpecialColors] = useState<string[]>(DEFAULT_SPECIAL_COLORS);
   const [standardColors, setStandardColors] = useState<string[]>(DEFAULT_STANDARD_COLORS);
 
   // Modal State
@@ -178,34 +180,44 @@ export default function App() {
 
   // --- Auto-open most recent graph logic ---
   useEffect(() => {
-    if (view === 'editor' && !activeGraphId && hasInitialized) {
-      if (graphs.length > 0) {
-        // Find most recently modified graph
-        const sorted = [...graphs].sort((a, b) => b.lastModified - a.lastModified);
-        const mostRecent = sorted[0];
-        setActiveGraphId(mostRecent.id);
-        setCurrentDiagram(mostRecent.diagramData);
-        setHistory([mostRecent.diagramData]);
-        setHistoryIndex(0);
-      } else {
-        // Create new graph if none exist
-        const newGraph: Graph = {
-          id: generateId(),
-          title: EMPTY_DIAGRAM.title,
-          caption: EMPTY_DIAGRAM.caption || 'Figure 1: Economic Diagram',
-          messages: [],
-          diagramData: { ...EMPTY_DIAGRAM },
-          createdAt: Date.now(),
-          lastModified: Date.now(),
-        };
-        setGraphs([newGraph]);
-        setActiveGraphId(newGraph.id);
-        setCurrentDiagram(newGraph.diagramData);
-        setHistory([newGraph.diagramData]);
-        setHistoryIndex(0);
-      }
+    // Only run when navigating to editor without an active graph, after initialization
+    if (view !== 'editor' || activeGraphId || !hasInitialized) {
+      return;
     }
-  }, [view, hasInitialized, activeGraphId, graphs]); // Note: graphs in dep array might be risky if we modify it inside, but we only filter/sort
+
+    if (graphs.length > 0) {
+      // Open most recently modified graph
+      const sorted = [...graphs].sort((a, b) => b.lastModified - a.lastModified);
+      const mostRecent = sorted[0];
+      setActiveGraphId(mostRecent.id);
+      setCurrentDiagram(mostRecent.diagramData);
+      setHistory([mostRecent.diagramData]);
+      historyRef.current = [mostRecent.diagramData];
+      setHistoryIndex(0);
+    } else if (graphs.length === 0) {
+      // Create new graph if none exist
+      const newGraph: Graph = {
+        id: generateId(),
+        title: EMPTY_DIAGRAM.title,
+        caption: EMPTY_DIAGRAM.caption || 'Figure 1: Economic Diagram',
+        messages: [],
+        diagramData: { ...EMPTY_DIAGRAM },
+        createdAt: Date.now(),
+        lastModified: Date.now(),
+      };
+      // Use functional update to ensure we're working with latest state
+      setGraphs(prev => {
+        // Guard: if graphs were just added by another effect/action, don't create duplicate
+        if (prev.length > 0) return prev;
+        return [newGraph];
+      });
+      setActiveGraphId(newGraph.id);
+      setCurrentDiagram(newGraph.diagramData);
+      setHistory([newGraph.diagramData]);
+      historyRef.current = [newGraph.diagramData];
+      setHistoryIndex(0);
+    }
+  }, [view, hasInitialized, activeGraphId, graphs.length]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
   useEffect(() => {
@@ -234,7 +246,8 @@ export default function App() {
         gridSize: settings.gridSize,
         snapToGrid: settings.snapToGrid,
         snapToPoints: settings.snapToPoints,
-        moveTogether: settings.moveTogether
+        moveTogether: settings.moveTogether,
+        snapThreshold: settings.snapThreshold
       }));
     } catch (e) {
       console.error('Failed to save settings:', e);
@@ -293,14 +306,20 @@ export default function App() {
   }, []);
 
   // --- History Management ---
+  const historyIndexRef = useRef(-1);
+  const historyRef = useRef<DiagramData[]>([]);
+
   const pushToHistory = useCallback((data: DiagramData) => {
     setHistory(prev => {
-      const newHistory = prev.slice(0, historyIndex + 1);
+      const newHistory = prev.slice(0, historyIndexRef.current + 1);
       newHistory.push(JSON.parse(JSON.stringify(data)));
-      return newHistory.slice(-50);
+      const result = newHistory.slice(-50);
+      historyRef.current = result;
+      historyIndexRef.current = result.length - 1;
+      return result;
     });
-    setHistoryIndex(prev => Math.min(prev + 1, 49));
-  }, [historyIndex]);
+    setHistoryIndex(historyIndexRef.current);
+  }, []);
 
   const scheduleHistoryPush = useCallback((data: DiagramData) => {
     if (historyDebounceRef.current) window.clearTimeout(historyDebounceRef.current);
@@ -326,22 +345,26 @@ export default function App() {
   }, [scheduleHistoryPush, scheduleAutosave]);
 
   const undo = useCallback(() => {
-    if (historyIndex > 0) {
-      const nextIndex = historyIndex - 1;
+    if (historyIndexRef.current > 0) {
+      const nextIndex = historyIndexRef.current - 1;
+      historyIndexRef.current = nextIndex;
       setHistoryIndex(nextIndex);
-      setCurrentDiagram(history[nextIndex]);
-      scheduleAutosave(history[nextIndex]);
+      const diagram = historyRef.current[nextIndex];
+      setCurrentDiagram(diagram);
+      scheduleAutosave(diagram);
     }
-  }, [historyIndex, history, scheduleAutosave]);
+  }, [scheduleAutosave]);
 
   const redo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const nextIndex = historyIndex + 1;
+    if (historyIndexRef.current < historyRef.current.length - 1) {
+      const nextIndex = historyIndexRef.current + 1;
+      historyIndexRef.current = nextIndex;
       setHistoryIndex(nextIndex);
-      setCurrentDiagram(history[nextIndex]);
-      scheduleAutosave(history[nextIndex]);
+      const diagram = historyRef.current[nextIndex];
+      setCurrentDiagram(diagram);
+      scheduleAutosave(diagram);
     }
-  }, [historyIndex, history, scheduleAutosave]);
+  }, [scheduleAutosave]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -356,11 +379,11 @@ export default function App() {
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         undo();
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.shiftKey && e.key === 'z'))) {
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
         e.preventDefault();
         redo();
       }
@@ -406,10 +429,11 @@ export default function App() {
       setActiveGraphId(graphId);
       setCurrentDiagram(graph.diagramData);
       setHistory([graph.diagramData]);
+      historyRef.current = [graph.diagramData];
       setHistoryIndex(0);
       navigateToView('editor');
     }
-  }, [graphs]);
+  }, [graphs, navigateToView]);
 
   const deleteGraph = useCallback((graphId: string) => {
     setConfirmModal({
@@ -427,7 +451,7 @@ export default function App() {
         setConfirmModal(c => ({ ...c, visible: false }));
       }
     });
-  }, [activeGraphId]);
+  }, [activeGraphId, navigateToView]);
 
   // Delete multiple graphs directly without showing confirmation modal
   // (Used for bulk delete where HomePage shows the confirmation)
@@ -438,7 +462,7 @@ export default function App() {
       setActiveGraphId(null);
       navigateToView('home');
     }
-  }, [activeGraphId]);
+  }, [activeGraphId, navigateToView]);
 
   // --- Project Management ---
   const createProject = useCallback(() => {
@@ -557,23 +581,161 @@ export default function App() {
     openGraph(graphId);
   };
 
+  const activeGraph = useMemo(
+    () => graphs.find(g => g.id === activeGraphId) || null,
+    [graphs, activeGraphId]
+  );
+
+  const projectGraphs = useMemo(() => {
+    if (!activeGraph) return [];
+    if (activeGraph.projectId) {
+      // Return graphs in the same project
+      return graphs.filter(g => g.projectId === activeGraph.projectId);
+    } else {
+      // Return other unassigned graphs
+      return graphs.filter(g => !g.projectId && g.id !== activeGraph.id);
+    }
+  }, [graphs, activeGraph]);
+
+  const currentProject = useMemo(
+    () => activeGraph?.projectId ? projects.find(p => p.id === activeGraph.projectId) : null,
+    [activeGraph, projects]
+  );
+
+  const handleSubmit = useCallback(async (e?: React.FormEvent, customPrompt?: string) => {
+    if (e) e.preventDefault();
+    const promptText = customPrompt || prompt;
+    if (!promptText.trim() || !activeGraphId) return;
+
+    // Check for API key before sending
+    if (!hasApiKey()) {
+      const errorMsg: Message = {
+        id: generateId(),
+        role: 'model',
+        content: "API key not configured. Please add your API key in Settings before using AI features.",
+        timestamp: Date.now()
+      };
+      setGraphs(prev => prev.map(g => {
+        if (g.id === activeGraphId) {
+          return { ...g, messages: [...g.messages, errorMsg] };
+        }
+        return g;
+      }));
+      return;
+    }
+
+    setIsLoading(true);
+    const userMsg: Message = {
+      id: generateId(),
+      role: 'user',
+      content: promptText,
+      timestamp: Date.now()
+    };
+
+    // Update graph with user message
+    setGraphs(prev => prev.map(g => {
+      if (g.id === activeGraphId) {
+        return {
+          ...g,
+          messages: [...g.messages, userMsg],
+          lastModified: Date.now()
+        };
+      }
+      return g;
+    }));
+    setPrompt('');
+
+    try {
+      const history = activeGraph?.messages.map(m => `${m.role}: ${m.content}`) || [];
+      const result = await generateDiagramData(promptText, history);
+
+      const aiMsg: Message = {
+        id: generateId(),
+        role: 'model',
+        content: `Here is the diagram for "${promptText}". You can drag points to adjust curves or double click labels to edit them.`,
+        diagramData: result,
+        timestamp: Date.now()
+      };
+
+      setGraphs(prev => prev.map(g => {
+        if (g.id === activeGraphId) {
+          return {
+            ...g,
+            messages: [...g.messages, aiMsg],
+            diagramData: result,
+            title: result.title,
+            lastModified: Date.now()
+          };
+        }
+        return g;
+      }));
+      setCurrentDiagram(result);
+      pushToHistory(result);
+
+    } catch (err) {
+      const message = err instanceof Error
+        ? err.message
+        : 'Sorry, I encountered an error generating the diagram. Please try again.';
+      const errorMsg: Message = {
+        id: generateId(),
+        role: 'model',
+        content: message,
+        timestamp: Date.now()
+      };
+      setGraphs(prev => prev.map(g => {
+        if (g.id === activeGraphId) {
+          return { ...g, messages: [...g.messages, errorMsg] };
+        }
+        return g;
+      }));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeGraphId, activeGraph, prompt, pushToHistory, setGraphs]);
+
+  const handleNewChat = useCallback(() => {
+    if (!activeGraphId) return;
+
+    setConfirmModal({
+      visible: true,
+      title: 'Start a new chat?'
+      ,
+      message: "This will clear the chat history (not the diagram). This cannot be undone.",
+      confirmText: 'Clear chat history',
+      danger: true,
+      onConfirm: () => {
+        setGraphs(prev => prev.map(g => {
+          if (g.id === activeGraphId) {
+            return { ...g, messages: [], lastModified: Date.now() };
+          }
+          return g;
+        }));
+        setPrompt('');
+        setConfirmModal(c => ({ ...c, visible: false }));
+      }
+    });
+  }, [activeGraphId, setGraphs]);
+
+  const pendingPromptRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (pendingPromptRef.current && activeGraphId) {
+      const prompt = pendingPromptRef.current;
+      pendingPromptRef.current = null;
+      handleSubmit(undefined, prompt);
+    }
+  }, [activeGraphId, handleSubmit]);
+
   const startWithPreset = (presetName: string) => {
     const graphId = createGraph();
-    const graph = graphs.find(g => g.id === graphId);
-    if (graph) {
-      openGraph(graphId);
-      setPrompt(presetName);
-      setTimeout(() => handleSubmit(undefined, presetName), 100);
-    } else {
-      // Graph not yet in state, need to handle differently
-      setActiveGraphId(graphId);
-      setCurrentDiagram({ ...EMPTY_DIAGRAM });
-      setHistory([{ ...EMPTY_DIAGRAM }]);
-      setHistoryIndex(0);
-      navigateToView('editor');
-      setPrompt(presetName);
-      setTimeout(() => handleSubmit(undefined, presetName), 100);
-    }
+    openGraph(graphId);
+    setCurrentDiagram({ ...EMPTY_DIAGRAM });
+    setHistory([{ ...EMPTY_DIAGRAM }]);
+    historyRef.current = [{ ...EMPTY_DIAGRAM }];
+    setHistoryIndex(0);
+    historyIndexRef.current = 0;
+    setPrompt(presetName);
+    pendingPromptRef.current = presetName;
   };
 
   // Handle label editing
@@ -646,7 +808,11 @@ export default function App() {
     }
 
     if (template.data.annotatedPoints) {
-      newData.annotatedPoints = [...newData.annotatedPoints, ...template.data.annotatedPoints];
+      const newPoints = template.data.annotatedPoints.map(p => ({
+        ...p,
+        id: `point-${generateId()}`
+      }));
+      newData.annotatedPoints = [...newData.annotatedPoints, ...newPoints];
     }
 
     handleDataChange(newData);
@@ -685,120 +851,11 @@ export default function App() {
   };
 
   const handleResetSpecialColors = () => {
-    setSpecialColors(['#000000', '#FFFFFF']);
+    setSpecialColors(DEFAULT_SPECIAL_COLORS);
   };
 
   const handleResetStandardColors = () => {
     setStandardColors(DEFAULT_STANDARD_COLORS);
-  };
-
-  const activeGraph = useMemo(
-    () => graphs.find(g => g.id === activeGraphId) || null,
-    [graphs, activeGraphId]
-  );
-
-  const projectGraphs = useMemo(() => {
-    if (!activeGraph) return [];
-    if (activeGraph.projectId) {
-      // Return graphs in the same project
-      return graphs.filter(g => g.projectId === activeGraph.projectId);
-    } else {
-      // Return other unassigned graphs
-      return graphs.filter(g => !g.projectId && g.id !== activeGraph.id);
-    }
-  }, [graphs, activeGraph]);
-
-  const currentProject = useMemo(
-    () => activeGraph?.projectId ? projects.find(p => p.id === activeGraph.projectId) : null,
-    [activeGraph, projects]
-  );
-
-  const handleSubmit = async (e?: React.FormEvent, customPrompt?: string) => {
-    if (e) e.preventDefault();
-    const promptText = customPrompt || prompt;
-    if (!promptText.trim() || !activeGraphId) return;
-
-    // Check for API key before sending
-    if (!hasApiKey()) {
-      const errorMsg: Message = {
-        id: generateId(),
-        role: 'model',
-        content: "API key not configured. Please add your Google AI Studio API key in Settings before using AI features.",
-        timestamp: Date.now()
-      };
-      setGraphs(prev => prev.map(g => {
-        if (g.id === activeGraphId) {
-          return { ...g, messages: [...g.messages, errorMsg] };
-        }
-        return g;
-      }));
-      return;
-    }
-
-    setIsLoading(true);
-    const userMsg: Message = {
-      id: generateId(),
-      role: 'user',
-      content: promptText,
-      timestamp: Date.now()
-    };
-
-    // Update graph with user message
-    setGraphs(prev => prev.map(g => {
-      if (g.id === activeGraphId) {
-        return {
-          ...g,
-          messages: [...g.messages, userMsg],
-          lastModified: Date.now()
-        };
-      }
-      return g;
-    }));
-    setPrompt('');
-
-    try {
-      const history = activeGraph?.messages.map(m => `${m.role}: ${m.content}`) || [];
-      const result = await generateDiagramData(promptText, history);
-
-      const aiMsg: Message = {
-        id: generateId(),
-        role: 'model',
-        content: `Here is the diagram for "${promptText}". You can drag points to adjust curves or double click labels to edit them.`,
-        diagramData: result,
-        timestamp: Date.now()
-      };
-
-      setGraphs(prev => prev.map(g => {
-        if (g.id === activeGraphId) {
-          return {
-            ...g,
-            messages: [...g.messages, aiMsg],
-            diagramData: result,
-            title: result.title,
-            lastModified: Date.now()
-          };
-        }
-        return g;
-      }));
-      setCurrentDiagram(result);
-      pushToHistory(result);
-
-    } catch (err) {
-      const errorMsg: Message = {
-        id: generateId(),
-        role: 'model',
-        content: "Sorry, I encountered an error generating the diagram. Please try again.",
-        timestamp: Date.now()
-      };
-      setGraphs(prev => prev.map(g => {
-        if (g.id === activeGraphId) {
-          return { ...g, messages: [...g.messages, errorMsg] };
-        }
-        return g;
-      }));
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   const restoreCheckpoint = (msg: Message) => {
@@ -1163,7 +1220,7 @@ export default function App() {
                       <div>
                         <p className="text-sm text-amber-800 font-medium">API key not configured</p>
                         <p className="text-xs text-amber-600 mt-0.5">
-                          Add your Google AI Studio API key in{' '}
+                          Add your API key in{' '}
                           <button
                             onClick={() => navigateToView('settings')}
                             className="underline font-medium hover:text-amber-800"
@@ -1246,9 +1303,20 @@ export default function App() {
                           }
                         }}
                         placeholder="Describe changes or a new graph..."
-                        className="w-full pr-12 pl-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none text-sm bg-gray-50 h-[52px] max-h-32 min-h-[52px]"
+                        className="w-full pr-24 pl-4 py-3 rounded-xl border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none resize-none text-sm bg-gray-50 h-[52px] max-h-32 min-h-[52px]"
                         style={{ height: '52px' }}
                       />
+
+                      <button
+                        type="button"
+                        onClick={handleNewChat}
+                        disabled={isLoading || !activeGraph || activeGraph.messages.length === 0}
+                        className="absolute right-12 top-2 p-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="New chat"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+
                       <button
                         type="submit"
                         disabled={isLoading || !prompt.trim()}

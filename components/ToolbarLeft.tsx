@@ -128,6 +128,7 @@ const ToolbarLeft: React.FC<ToolbarLeftProps> = ({
                                 onClick={() => onColorSelect(color)}
                                 onMouseEnter={(e) => showTooltip(e.currentTarget, `Standard Slot ${idx + 1}\n${color.toUpperCase()}`, 'right')}
                                 onMouseLeave={hideTooltip}
+                                aria-label={`Standard Slot ${idx + 1} ${color.toUpperCase()}`}
                                 className={`w-5 h-5 rounded-sm transition-transform hover:scale-110 ${activeColor === color ? 'ring-2 ring-offset-1 ring-blue-500 z-10' : ''
                                     }`}
                                 style={{ backgroundColor: color }}
@@ -143,6 +144,7 @@ const ToolbarLeft: React.FC<ToolbarLeftProps> = ({
                                 onClick={() => onColorSelect(color)}
                                 onMouseEnter={(e) => showTooltip(e.currentTarget, `Special Slot ${idx + 1}\n${color.toUpperCase()}`, 'right')}
                                 onMouseLeave={hideTooltip}
+                                aria-label={`Special Slot ${idx + 1} ${color.toUpperCase()}`}
                                 className={`w-5 h-5 rounded-sm transition-transform hover:scale-110 border border-gray-200 ${activeColor === color ? 'ring-2 ring-offset-1 ring-blue-500 z-10' : ''
                                     }`}
                                 style={{ backgroundColor: color }}
@@ -175,6 +177,7 @@ const ToolbarLeft: React.FC<ToolbarLeftProps> = ({
                     <select
                         value={strokeWidth}
                         onChange={(e) => onStrokeWidthChange(Number(e.target.value))}
+                        aria-label="Line Width"
                         className="w-10 text-xs text-center border border-gray-200 rounded py-0.5"
                     >
                         {[1, 2, 3, 4, 5, 6].map((w) => (

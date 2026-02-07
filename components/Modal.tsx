@@ -254,6 +254,16 @@ export const ColorPickerModal: React.FC<ColorPickerModalProps> = ({
         }
     }, [isOpen, currentColor]);
 
+    // Clean up debounce timeout on unmount
+    useEffect(() => {
+        return () => {
+            if (debounceTimeoutRef.current) {
+                window.clearTimeout(debounceTimeoutRef.current);
+                debounceTimeoutRef.current = null;
+            }
+        };
+    }, []);
+
     // Handle real-time color changes from the hidden input
     const handleColorInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const newColor = e.target.value;
@@ -282,7 +292,8 @@ export const ColorPickerModal: React.FC<ColorPickerModalProps> = ({
 
     // Manual text input change
     const handleHexInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setEditingColor(e.target.value);
+        const val = e.target.value.replace(/[^0-9A-Fa-f]/g, '').slice(0, 6);
+        setEditingColor('#' + val);
     };
 
     const handleHexInputBlur = () => {
@@ -297,7 +308,7 @@ export const ColorPickerModal: React.FC<ColorPickerModalProps> = ({
             }
             onSelect(editingColor);
         }
-    }
+    };
 
     const handleSlotClick = (type: 'standard' | 'special', index: number, color: string) => {
         setEditingColor(color);
@@ -460,11 +471,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     const [scale, setScale] = useState(2);
     const [bgColor, setBgColor] = useState('#ffffff');
     const [isExporting, setIsExporting] = useState(false);
+    const [exportError, setExportError] = useState<string | null>(null);
     const [includeTitle, setIncludeTitle] = useState(true);
     const [includeDescription, setIncludeDescription] = useState(true);
 
     // View Mode: Preview (result) or Crop (edit)
     const [mode, setMode] = useState<'preview' | 'crop'>('preview');
+
+    // Ref to track blob URL for proper cleanup
+    const baseDataUrlRef = useRef<string | null>(null);
 
     const [crop, setCrop] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
 
@@ -503,13 +518,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 const svgEl = svgDoc.querySelector('svg');
                 if (!svgEl) return;
 
-                const baseW = parseInt(svgEl.getAttribute('width') || '800');
-                const baseH = parseInt(svgEl.getAttribute('height') || '550');
+                const baseW = parseInt((svgEl.getAttribute('width') || '800').trim(), 10) || 800;
+                const baseH = parseInt((svgEl.getAttribute('height') || '550').trim(), 10) || 550;
 
                 const blob = new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' });
                 const url = URL.createObjectURL(blob);
 
                 if (active) {
+                    // Revoke previous URL before setting new one
+                    if (baseDataUrlRef.current) {
+                        URL.revokeObjectURL(baseDataUrlRef.current);
+                    }
+                    baseDataUrlRef.current = url;
                     setBaseDataUrl(url);
                     setPreviewMetrics(p => ({ ...p, baseW, baseH }));
                 }
@@ -518,80 +538,100 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             }
         };
         loadBase();
-        return () => { active = false; };
+        return () => {
+            active = false;
+        };
     }, [svgUrl, isOpen]);
+
+    // Separate cleanup effect for unmount
+    useEffect(() => {
+        return () => {
+            if (baseDataUrlRef.current) {
+                URL.revokeObjectURL(baseDataUrlRef.current);
+                baseDataUrlRef.current = null;
+            }
+        };
+    }, []);
 
 
     // 2. Generate Final Preview URL (Debounced)
     const generateFinalPreview = useCallback(async () => {
         if (!baseDataUrl || !previewMetrics.baseW) return;
 
-        const img = new Image();
-        img.src = baseDataUrl;
-        await new Promise<void>((r) => { img.onload = () => r(); });
+        try {
+            const img = new Image();
+            img.src = baseDataUrl;
+            await new Promise<void>((resolve, reject) => {
+                img.onload = () => resolve();
+                img.onerror = () => reject(new Error('Failed to load image'));
+            });
 
-        const { baseW, baseH } = previewMetrics;
+            const { baseW, baseH } = previewMetrics;
 
-        // Calculate dimensions
-        const cropW = baseW - crop.left - crop.right;
-        const cropH = baseH - crop.top - crop.bottom;
+            // Calculate dimensions
+            const cropW = baseW - crop.left - crop.right;
+            const cropH = baseH - crop.top - crop.bottom;
 
-        // Use a reasonable scale for preview to look sharp but not kill performance
-        // For final export we use 'scale' state (2x, 3x), for preview 1.5x is usually plenty
-        const previewScale = 1.5;
+            // Use a reasonable scale for preview to look sharp but not kill performance
+            // For final export we use 'scale' state (2x, 3x), for preview 1.5x is usually plenty
+            const previewScale = 1.5;
 
-        const titleH = includeTitle ? 60 * previewScale : 0;
-        const descH = (includeDescription && description) ? 50 * previewScale : 0;
-        const pad = 20 * previewScale;
+            const titleH = includeTitle ? 60 * previewScale : 0;
+            const descH = (includeDescription && description) ? 50 * previewScale : 0;
+            const pad = 20 * previewScale;
 
-        const canvasW = Math.max(cropW * previewScale + pad * 2, 600);
-        const canvasH = titleH + (cropH * previewScale) + descH + pad * 2;
+            const canvasW = Math.max(cropW * previewScale + pad * 2, 600);
+            const canvasH = titleH + (cropH * previewScale) + descH + pad * 2;
 
-        const canvas = document.createElement('canvas');
-        canvas.width = canvasW;
-        canvas.height = canvasH;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+            const canvas = document.createElement('canvas');
+            canvas.width = canvasW;
+            canvas.height = canvasH;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
 
-        // Background
-        ctx.fillStyle = bgColor;
-        if (bgColor === 'transparent') {
-            ctx.clearRect(0, 0, canvasW, canvasH);
-        } else {
-            ctx.fillRect(0, 0, canvasW, canvasH);
+            // Background
+            ctx.fillStyle = bgColor;
+            if (bgColor === 'transparent') {
+                ctx.clearRect(0, 0, canvasW, canvasH);
+            } else {
+                ctx.fillRect(0, 0, canvasW, canvasH);
+            }
+
+            const isDark = bgColor === '#1f2937';
+            ctx.fillStyle = isDark ? '#ffffff' : '#000000';
+            ctx.textAlign = 'center';
+
+            // Draw Title
+            if (includeTitle) {
+                ctx.font = `bold ${24 * previewScale}px sans-serif`;
+                ctx.textBaseline = 'top';
+                ctx.fillText(title, canvasW / 2, pad);
+            }
+
+            // Draw Description
+            if (includeDescription && description) {
+                ctx.font = `${16 * previewScale}px sans-serif`;
+                ctx.textBaseline = 'bottom';
+                ctx.fillText(description, canvasW / 2, canvasH - pad);
+            }
+
+            // Draw Image Portion
+            const destW = cropW * previewScale;
+            const destH = cropH * previewScale;
+            const destX = (canvasW - destW) / 2;
+            const destY = titleH + pad / 2; // rough vertical centering in available space?
+
+            ctx.drawImage(
+                img,
+                crop.left, crop.top, cropW, cropH,
+                destX, destY, destW, destH
+            );
+
+            setFinalPreviewUrl(canvas.toDataURL('image/png'));
+        } catch (error) {
+            console.error('Failed to generate preview:', error);
+            // Don't set finalPreviewUrl on failure - leave it as is
         }
-
-        const isDark = bgColor === '#1f2937';
-        ctx.fillStyle = isDark ? '#ffffff' : '#000000';
-        ctx.textAlign = 'center';
-
-        // Draw Title
-        if (includeTitle) {
-            ctx.font = `bold ${24 * previewScale}px sans-serif`;
-            ctx.textBaseline = 'top';
-            ctx.fillText(title, canvasW / 2, pad);
-        }
-
-        // Draw Description
-        if (includeDescription && description) {
-            ctx.font = `${16 * previewScale}px sans-serif`;
-            ctx.textBaseline = 'bottom';
-            ctx.fillText(description, canvasW / 2, canvasH - pad);
-        }
-
-        // Draw Image Portion
-        const destW = cropW * previewScale;
-        const destH = cropH * previewScale;
-        const destX = (canvasW - destW) / 2;
-        const destY = titleH + pad / 2; // rough vertical centering in available space?
-
-        ctx.drawImage(
-            img,
-            crop.left, crop.top, cropW, cropH,
-            destX, destY, destW, destH
-        );
-
-        setFinalPreviewUrl(canvas.toDataURL('image/png'));
     }, [baseDataUrl, previewMetrics, crop, title, description, includeTitle, includeDescription, bgColor]);
 
     useEffect(() => {
@@ -714,28 +754,65 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
 
     const handleFinalExport = async () => {
+        // Validate required data before setting export state
         if (!baseDataUrl) return;
+        if (format === 'svg' && !svgUrl) return;
+
         setIsExporting(true);
+        setExportError(null);
         try {
             // Re-use logic to create high-res canvas or download SVG
             const img = new Image();
             img.src = baseDataUrl;
-            await new Promise<void>((r) => { img.onload = () => r(); });
+            await new Promise<void>((resolve, reject) => {
+                img.onload = () => resolve();
+                img.onerror = () => reject(new Error('Failed to load image'));
+            });
 
             if (format === 'svg') {
-                // For SVG export, we actually need to modify the SVG viewbox or download as is?
-                // The requirements usually imply downloading the SVG file. 
-                // However, 'crop' on SVG is tricky without editing the viewbox.
-                // For now, let's assume SVG export is just the raw file, OR we can crop the ViewBox.
-                // Let's implement ViewBox cropping for SVG if we can, or just download raw.
-                // Given the user wants "Export PNG/JPG" mostly, SVG might just be raw. 
-                // Let's stick to raw download for SVG for safety, unless requested.
+                // Implement ViewBox cropping for SVG
+
+                // Load and parse SVG content
+                const resp = await fetch(svgUrl);
+                const svgText = await resp.text();
+                const parser = new DOMParser();
+                const svgDoc = parser.parseFromString(svgText, 'image/svg+xml');
+                const svgEl = svgDoc.querySelector('svg');
+
+                if (!svgEl) {
+                    throw new Error('Invalid SVG content');
+                }
+
+                // Get original dimensions
+                const originalWidth = parseFloat(svgEl.getAttribute('width') || '800');
+                const originalHeight = parseFloat(svgEl.getAttribute('height') || '550');
+
+                // Apply crop by modifying viewBox
+                const { baseW, baseH } = previewMetrics;
+                const cropX = crop.left;
+                const cropY = crop.top;
+                const cropWidth = baseW - crop.left - crop.right;
+                const cropHeight = baseH - crop.top - crop.bottom;
+
+                // Set new viewBox based on crop
+                svgEl.setAttribute('viewBox', `${cropX} ${cropY} ${cropWidth} ${cropHeight}`);
+                svgEl.setAttribute('width', cropWidth.toString());
+                svgEl.setAttribute('height', cropHeight.toString());
+
+                // Serialize modified SVG
+                const serializer = new XMLSerializer();
+                const modifiedSvgText = serializer.serializeToString(svgEl);
+
+                // Create blob and download
+                const blob = new Blob([modifiedSvgText], { type: 'image/svg+xml;charset=utf-8' });
+                const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
-                a.href = svgUrl!;
+                a.href = url;
                 a.download = `${title.replace(/\s+/g, '_').toLowerCase()}.svg`;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
+                URL.revokeObjectURL(url);
             } else {
                 const { baseW, baseH } = previewMetrics;
                 const cropW = baseW - crop.left - crop.right;
@@ -754,10 +831,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 const ctx = canvas.getContext('2d');
                 if (ctx) {
                     // Background
-                    ctx.fillStyle = bgColor;
                     if (bgColor === 'transparent') {
-                        ctx.clearRect(0, 0, canvasW, canvasH);
+                        // For JPEG, transparent means white background (JPEG doesn't support transparency)
+                        if (format === 'jpeg') {
+                            ctx.fillStyle = '#ffffff';
+                            ctx.fillRect(0, 0, canvasW, canvasH);
+                        } else {
+                            ctx.clearRect(0, 0, canvasW, canvasH);
+                        }
                     } else {
+                        ctx.fillStyle = bgColor;
                         ctx.fillRect(0, 0, canvasW, canvasH);
                     }
 
@@ -800,6 +883,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             onClose();
         } catch (e) {
             console.error(e);
+            const errorMessage = e instanceof Error ? e.message : 'Export failed. Please try again.';
+            setExportError(errorMessage);
         } finally {
             setIsExporting(false);
         }
@@ -1058,6 +1143,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
                         {/* Footer - Button */}
                         <div className="p-5 border-t border-gray-100 bg-gray-50 rounded-b-xl">
+                            {exportError && (
+                                <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                                    <p className="text-sm text-red-600 font-medium">{exportError}</p>
+                                </div>
+                            )}
                             <button
                                 onClick={handleFinalExport}
                                 disabled={isExporting}

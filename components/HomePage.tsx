@@ -96,7 +96,6 @@ const HomePage: React.FC<HomePageProps> = ({
     const [moveMenuOpen, setMoveMenuOpen] = useState(false);
     const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
     const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
-    const menuRef = useRef<HTMLDivElement>(null);
     const moveMenuRef = useRef<HTMLDivElement>(null);
 
     const { showTooltip, hideTooltip, TooltipPortal } = usePortalTooltip({ delay: 400, placement: 'bottom' });
@@ -109,7 +108,9 @@ const HomePage: React.FC<HomePageProps> = ({
     // Close menus when clicking outside
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
-            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+            const target = event.target as HTMLElement;
+            // Close project menu if click is outside any project menu
+            if (projectMenuOpen && !target.closest('[data-project-menu]')) {
                 setProjectMenuOpen(null);
             }
             if (moveMenuRef.current && !moveMenuRef.current.contains(event.target as Node)) {
@@ -137,8 +138,8 @@ const HomePage: React.FC<HomePageProps> = ({
             const query = searchQuery.toLowerCase();
             filtered = filtered.filter(g =>
                 g.title.toLowerCase().includes(query) ||
-                g.diagramData.title.toLowerCase().includes(query) ||
-                g.diagramData.summary.toLowerCase().includes(query)
+                g.diagramData?.title?.toLowerCase().includes(query) ||
+                g.diagramData?.summary?.toLowerCase().includes(query)
             );
         }
 
@@ -147,6 +148,11 @@ const HomePage: React.FC<HomePageProps> = ({
 
     // Get unassigned graphs count
     const unassignedCount = graphs.filter(g => !g.projectId).length;
+
+    // Clear selection anchor when filters change
+    useEffect(() => {
+        setLastSelectedIndex(null);
+    }, [searchQuery, selectedProject]);
 
     const formatDate = (timestamp: number) => {
         const date = new Date(timestamp);
@@ -287,9 +293,19 @@ const HomePage: React.FC<HomePageProps> = ({
 
                     {/* Selection Checkbox */}
                     <div
+                        role="checkbox"
+                        aria-checked={isSelected}
+                        tabIndex={0}
                         onClick={(e) => {
                             e.stopPropagation();
                             toggleGraphSelection(graph.id, index);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                toggleGraphSelection(graph.id, index);
+                            }
                         }}
                         className={`absolute top-2 left-2 w-5 h-5 rounded border-2 flex items-center justify-center transition-all cursor-pointer ${isSelected
                             ? 'bg-blue-600 border-blue-600 opacity-100'
@@ -309,9 +325,9 @@ const HomePage: React.FC<HomePageProps> = ({
                     {showProjectBadge && (
                         <div
                             className="absolute top-2 left-9 flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium bg-white/90 backdrop-blur-sm shadow-sm"
-                            style={{ color: graphProject.color }}
+                            style={{ color: graphProject.color || '#3b82f6' }}
                         >
-                            <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: graphProject.color }} />
+                            <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: graphProject.color || '#3b82f6' }} />
                             <span className="truncate max-w-[100px]">{graphProject.name}</span>
                         </div>
                     )}
@@ -323,6 +339,7 @@ const HomePage: React.FC<HomePageProps> = ({
                             onDeleteGraph(graph.id);
                         }}
                         className="absolute top-2 right-2 p-1.5 bg-white/80 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-50 hover:text-red-600 transition-all"
+                        aria-label="Delete graph"
                     >
                         <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -340,7 +357,7 @@ const HomePage: React.FC<HomePageProps> = ({
                         onMouseLeave={hideTooltip}
                     >
                         <h3 className="font-medium text-gray-900 truncate group-hover/title:text-blue-600 transition-colors flex-1">
-                            {graph.diagramData.title || graph.title}
+                            {graph.diagramData?.title || graph.title}
                         </h3>
                         {!isSelectMode && <Pencil className="w-3 h-3 text-gray-400 opacity-0 group-hover/title:opacity-100 transition-opacity shrink-0" />}
                     </div>
@@ -366,9 +383,19 @@ const HomePage: React.FC<HomePageProps> = ({
             >
                 {/* Checkbox */}
                 <div
+                    role="checkbox"
+                    aria-checked={isSelected}
+                    tabIndex={0}
                     onClick={(e) => {
                         e.stopPropagation();
                         toggleGraphSelection(graph.id, index);
+                    }}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            toggleGraphSelection(graph.id, index);
+                        }
                     }}
                     className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all cursor-pointer shrink-0 ${isSelected
                         ? 'bg-blue-600 border-blue-600'
@@ -399,21 +426,21 @@ const HomePage: React.FC<HomePageProps> = ({
                         onMouseLeave={hideTooltip}
                     >
                         <h3 className="font-medium text-gray-900 truncate group-hover/title:text-blue-600 transition-colors">
-                            {graph.diagramData.title || graph.title}
+                            {graph.diagramData?.title || graph.title}
                         </h3>
                         {!isSelectMode && <Pencil className="w-3 h-3 text-gray-400 opacity-0 group-hover/title:opacity-100 transition-opacity shrink-0" />}
                         {showProjectBadge && (
                             <div
                                 className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-gray-50"
-                                style={{ color: graphProject.color }}
+                                style={{ color: graphProject.color || '#3b82f6' }}
                             >
-                                <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: graphProject.color }} />
+                                <div className="w-2 h-2 rounded-sm" style={{ backgroundColor: graphProject.color || '#3b82f6' }} />
                                 <span>{graphProject.name}</span>
                             </div>
                         )}
                     </div>
                     <p className="text-xs text-gray-500 truncate">
-                        {graph.diagramData.summary}
+                        {graph.diagramData?.summary}
                     </p>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-gray-500">
@@ -426,6 +453,7 @@ const HomePage: React.FC<HomePageProps> = ({
                                     onDeleteGraph(graph.id);
                                 }}
                                 className="p-1.5 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-50 hover:text-red-600 transition-all"
+                                aria-label="Delete graph"
                             >
                                 <Trash2 className="w-3.5 h-3.5" />
                             </button>
@@ -645,7 +673,15 @@ const HomePage: React.FC<HomePageProps> = ({
                                             return (
                                                 <div key={project.id} className="relative group">
                                                     <div
+                                                        role="button"
+                                                        tabIndex={0}
                                                         onClick={() => setSelectedProject(project.id)}
+                                                        onKeyDown={(e) => {
+                                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                                e.preventDefault();
+                                                                setSelectedProject(project.id);
+                                                            }
+                                                        }}
                                                         className={`w-full flex items-center justify-between p-2.5 rounded-lg text-sm transition-colors cursor-pointer ${selectedProject === project.id
                                                             ? 'bg-blue-50 text-blue-700 font-medium'
                                                             : 'text-gray-700 hover:bg-gray-50'
@@ -675,7 +711,8 @@ const HomePage: React.FC<HomePageProps> = ({
                                                     {/* Project Menu */}
                                                     {projectMenuOpen === project.id && (
                                                         <div
-                                                            ref={menuRef}
+                                                            data-project-menu
+                                                            data-project-id={project.id}
                                                             className="absolute right-0 bottom-full mb-1 bg-white border border-gray-200 rounded-lg shadow-lg py-1 z-20 min-w-[120px]"
                                                         >
                                                             <button
