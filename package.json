@@ -1,0 +1,55 @@
+{
+  "name": "ib-econgraph-ai",
+  "version": "1.0.0",
+  "description": "Free and open-source AI-powered economics diagram editor built for IB students and educators.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "Sukarth Acharya",
+    "url": "https://github.com/sukarth"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sukarth/IB-EconGraph-AI.git"
+  },
+  "homepage": "https://github.com/sukarth/IB-EconGraph-AI",
+  "bugs": {
+    "url": "https://github.com/sukarth/IB-EconGraph-AI/issues"
+  },
+  "keywords": [
+    "ib-economics",
+    "economics",
+    "diagram",
+    "graph",
+    "editor",
+    "ai",
+    "gemini",
+    "svg",
+    "react",
+    "typescript",
+    "education",
+    "ib",
+    "international-baccalaureate",
+    "supply-and-demand",
+    "microeconomics",
+    "macroeconomics"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@google/genai": "^1.31.0",
+    "react": "^19.2.1",
+    "lucide-react": "^0.555.0",
+    "react-dom": "^19.2.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
