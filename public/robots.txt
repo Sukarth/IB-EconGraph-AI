@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Sitemap
+Sitemap: https://ib-econgraph-ai.vercel.app/sitemap.xml
