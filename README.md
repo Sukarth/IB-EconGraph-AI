@@ -134,7 +134,13 @@ Below are some planned features for the future. Feel free to **contribute** or s
 
 ## Support
 
-If you find the project useful, please consider supporting it by starring the repo and sharing it with your friends. Your support helps me keep improving the project and means a lot to me. Thank you! 🙏
+If this project saves you time, consider supporting my work — it keeps these tools free, open source, and maintained:
+
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-%E2%9D%A4-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Sukarth)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-Support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/sukarth)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-☕-FFDD00?logoColor=black)](https://buymeacoffee.com/sukarth)
+
+If you can't donate, but nonetheless found the project useful, please consider supporting it by starring the repo ⭐ and sharing it with your friends. Your support helps me keep improving the project and means a lot to me. Thank you! 🙏
 
 ---
 
