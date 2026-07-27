@@ -268,6 +268,14 @@ export default function App() {
       setGraphs([]);
       setProjects([]);
       setActiveGraphId(null);
+      // Also blank the canvas and its undo stack. Clearing the collections
+      // alone leaves the previous account's open diagram on screen until the
+      // first cloud pull lands, which is exactly what this guard is for.
+      const blank = { ...EMPTY_DIAGRAM };
+      setCurrentDiagram(blank);
+      setHistory([blank]);
+      historyRef.current = [blank];
+      setHistoryIndex(0);
     }
     try { localStorage.setItem(STORAGE_KEYS.owner, uid); } catch { /* ignore */ }
   }, [user?.id, hasInitialized]);
@@ -735,6 +743,12 @@ export default function App() {
     [graphs, activeGraphId]
   );
 
+  // Latest graphs, readable from async callbacks that would otherwise close
+  // over the snapshot taken before an `await` (e.g. a rename the user makes
+  // while a generation is still in flight).
+  const graphsRef = useRef(graphs);
+  graphsRef.current = graphs;
+
   const projectGraphs = useMemo(() => {
     if (!activeGraph) return [];
     if (activeGraph.projectId) {
@@ -821,11 +835,14 @@ export default function App() {
 
       // Only let the AI name the graph while it still has the default title.
       // Once the user has renamed it, that name is theirs and a later
-      // generation must not silently overwrite it.
-      const userNamed = !!activeGraph
-        && activeGraph.title.trim() !== ''
-        && activeGraph.title !== EMPTY_DIAGRAM.title;
-      const nextDiagram = userNamed ? { ...result, title: activeGraph!.title } : result;
+      // generation must not silently overwrite it. Read the title as it is
+      // *now*, not as it was when the request was sent, so a rename made while
+      // this was generating still wins.
+      const liveGraph = graphsRef.current.find(g => g.id === activeGraphId) || null;
+      const userNamed = !!liveGraph
+        && liveGraph.title.trim() !== ''
+        && liveGraph.title !== EMPTY_DIAGRAM.title;
+      const nextDiagram = userNamed ? { ...result, title: liveGraph!.title } : result;
 
       const aiMsg: Message = {
         id: generateId(),

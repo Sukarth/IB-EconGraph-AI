@@ -36,6 +36,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             .maybeSingle(),
     ]);
 
+    // A failed lookup must not masquerade as "0 used" — that would show a
+    // full quota to someone who has already spent it.
+    if (usageResult.error) {
+        console.error('usage: failed to read ai_usage', usageResult.error);
+        return res.status(503).json({ error: 'Usage service is temporarily unavailable.' });
+    }
+
     const used = usageResult.data?.count ?? 0;
     return res.status(200).json({
         used,

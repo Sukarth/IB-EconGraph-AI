@@ -121,10 +121,10 @@ export default defineConfig(({ mode, command }) => {
             allowedHosts: ['.devtunnels.ms', '.ngrok-free.app', '.trycloudflare.com'],
         },
         plugins: [react(), devApiPlugin(__dirname)],
-        define: {
-            'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-            'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-        },
+        // No `define` for GEMINI_API_KEY on purpose: it would inline the server's
+        // key into the client bundle for anyone to read. The browser talks to
+        // /api/generate, which holds the key server-side; users on their own key
+        // supply it at runtime through Settings.
         resolve: {
             alias: {
                 '@': path.resolve(__dirname, '.'),

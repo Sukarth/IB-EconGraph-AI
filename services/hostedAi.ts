@@ -46,9 +46,11 @@ export async function generateDiagramDataHosted(prompt: string, history: string[
 
 /** Fetch the signed-in user's hosted AI usage. Returns null when unavailable. */
 export async function fetchHostedUsage(): Promise<HostedUsage | null> {
-    const token = await getAccessToken();
-    if (!token) return null;
     try {
+        // Inside the try: a failed session restore should read as "no usage to
+        // show", not reject and leave callers with an unhandled rejection.
+        const token = await getAccessToken();
+        if (!token) return null;
         const res = await fetch('/api/usage', {
             headers: { Authorization: `Bearer ${token}` },
         });

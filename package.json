@@ -3,7 +3,7 @@
   "version": "1.1.0",
   "description": "Free and open-source AI-powered economics diagram editor built for IB students and educators.",
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": {
     "name": "Sukarth Acharya",
     "url": "https://github.com/sukarth"

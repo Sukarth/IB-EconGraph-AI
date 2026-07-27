@@ -269,7 +269,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                                     <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                                 </button>
                             </div>
-                            <p className="text-sm text-gray-400 mt-5 flex items-center justify-center gap-1.5 font-small">
+                            <p className="text-sm text-gray-400 mt-5 flex items-center justify-center gap-1.5">
                                 <Heart className="w-3.5 h-3.5 text-rose-400" />
                                 Everything a student needs to finish their IA is free and unlimited, forever.
                             </p>

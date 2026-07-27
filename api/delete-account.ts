@@ -45,7 +45,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
     }
 
-    if (profile?.polar_subscription_id && ACTIVE_STATUSES.has(profile.pro_status)) {
+    // Try to cancel whenever a subscription id is on file, without trusting our
+    // own pro_status: if that column is stale (a missed webhook), gating on it
+    // would skip cancellation and leave a live subscription billing a deleted
+    // account. Revoking something already inactive is handled below.
+    if (profile?.polar_subscription_id) {
         const subId = profile.polar_subscription_id;
         try {
             await getPolar().subscriptions.revoke({ id: subId });
@@ -58,8 +62,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             try {
                 const sub = await getPolar().subscriptions.get({ id: subId });
                 stillActive = ACTIVE_STATUSES.has(sub.status ?? '');
-            } catch {
-                stillActive = false; // e.g. 404 not found → already gone
+            } catch (lookupErr) {
+                // Only a definite "not found" proves the subscription is gone.
+                // Treating any failure as gone would delete the account during a
+                // Polar outage and orphan a subscription that keeps charging.
+                const status = (lookupErr as { statusCode?: number; status?: number } | null)?.statusCode
+                    ?? (lookupErr as { status?: number } | null)?.status;
+                stillActive = status !== 404;
             }
             if (stillActive) {
                 console.error('delete-account: subscription cancel failed', err);

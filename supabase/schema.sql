@@ -338,6 +338,25 @@ create index if not exists shares_user_idx on public.shares (user_id);
 create index if not exists shares_graph_idx on public.shares (graph_id);
 create index if not exists shares_project_idx on public.shares (project_id);
 
+-- One live link per piece of content. The client looks up an existing share
+-- before minting a slug, but two shares created at once would both miss and
+-- each insert a row — and revoking the link shown in the UI would leave the
+-- other one publicly readable. Collapse any duplicates that predate these
+-- indexes (keeping the most recently updated) so they can be created.
+delete from public.shares s
+using public.shares t
+where s.id <> t.id
+  and s.user_id = t.user_id
+  and s.kind = t.kind
+  and s.graph_id is not distinct from t.graph_id
+  and s.project_id is not distinct from t.project_id
+  and (s.updated_at, s.id) < (t.updated_at, t.id);
+
+create unique index if not exists shares_one_per_graph
+  on public.shares (user_id, graph_id) where kind = 'graph';
+create unique index if not exists shares_one_per_project
+  on public.shares (user_id, project_id) where kind = 'project';
+
 alter table public.shares enable row level security;
 
 -- Owners can read their own share rows (needed for getShareIdFor* / refresh).
@@ -385,6 +404,47 @@ drop policy if exists "shares: delete own" on public.shares;
 create policy "shares: delete own"
   on public.shares for delete
   using (auth.uid() = user_id);
+
+-- Deleting shared content must take its public link with it. The client already
+-- prunes these in refreshShares() during sync, but that pass is best-effort and
+-- its failures are swallowed, which would leave a "deleted" diagram readable by
+-- anyone still holding the slug. Doing it here makes the revoke happen the
+-- moment the deletion reaches the server, whichever client sent it.
+--
+-- Note this covers directly shared rows only. A graph deleted out of a SHARED
+-- PROJECT still needs the client to re-render that project's payload, since the
+-- payload is a snapshot the database can't rebuild.
+create or replace function public.purge_shares_for_deleted_content()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.deleted and not coalesce(old.deleted, false) then
+    if tg_table_name = 'graphs' then
+      delete from public.shares
+      where user_id = new.user_id and kind = 'graph' and graph_id = new.id;
+    else
+      delete from public.shares
+      where user_id = new.user_id and kind = 'project' and project_id = new.id;
+    end if;
+  end if;
+  return null;
+end;
+$$;
+
+revoke execute on function public.purge_shares_for_deleted_content() from public, anon, authenticated;
+
+drop trigger if exists graphs_purge_shares_on_delete on public.graphs;
+create trigger graphs_purge_shares_on_delete
+  after insert or update of deleted on public.graphs
+  for each row execute function public.purge_shares_for_deleted_content();
+
+drop trigger if exists projects_purge_shares_on_delete on public.projects;
+create trigger projects_purge_shares_on_delete
+  after insert or update of deleted on public.projects
+  for each row execute function public.purge_shares_for_deleted_content();
 
 -- ----------------------------------------------------------------------------
 -- templates — user's custom component templates (synced)

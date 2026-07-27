@@ -121,10 +121,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
     }
 
-    const profile = await getProfile(user.id).catch((err) => {
+    // A failed lookup is not the same as "not a Supporter" — answering 402 here
+    // would tell a paying user their plan lapsed during a transient DB blip.
+    let profile;
+    try {
+        profile = await getProfile(user.id);
+    } catch (err) {
         console.error('generate: profile lookup failed', err);
-        return null;
-    });
+        return res.status(503).json({
+            error: 'Could not confirm your plan right now. Please try again in a moment.',
+        });
+    }
     if (!isProfilePro(profile)) {
         return res.status(402).json({
             error: 'Hosted AI is part of the Supporter plan. You can keep generating for free with your own API key (Settings > AI Provider).',
@@ -145,7 +152,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.error('generate: usage metering failed', usageError);
         return res.status(500).json({ error: 'Usage metering failed. Please try again.' });
     }
-    if (typeof newCount === 'number' && newCount < 0) {
+    // Fail closed: an unexpected return type must not skip the quota check and
+    // hand out unmetered generations on the hosted key.
+    if (typeof newCount !== 'number') {
+        console.error('generate: increment_ai_usage returned a non-numeric result', newCount);
+        return res.status(500).json({ error: 'Usage metering failed. Please try again.' });
+    }
+    if (newCount < 0) {
         return res.status(429).json({
             error: `You've used all ${limit} hosted generations for this month. They reset at the start of next month, or add your own free API key in Settings for unlimited generations.`,
             code: 'quota_exceeded',

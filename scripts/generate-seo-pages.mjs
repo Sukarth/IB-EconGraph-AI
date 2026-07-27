@@ -56,8 +56,10 @@ function svgLabel(text) {
             i += consumed;
         } else {
             // Gather the whole plain-text run and emit it once, applying any
-            // pending baseline reset to it.
-            let j = i;
+            // pending baseline reset to it. A trailing '_' or '^' has nothing
+            // to mark up and lands here, so always consume the character at i
+            // to guarantee the outer loop makes progress.
+            let j = i + 1;
             while (j < text.length && text[j] !== '_' && text[j] !== '^') j += 1;
             const run = text.slice(i, j);
             out += pendingReset !== null

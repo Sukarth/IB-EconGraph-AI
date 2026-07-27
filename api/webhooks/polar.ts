@@ -53,11 +53,17 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     // Read what's currently on file so out-of-order or superseded events for a
     // DIFFERENT subscription can't clobber the one the user is actually on
     // (e.g. after cancel + resubscribe, a delayed event for the old sub).
-    const { data: current } = await admin
+    const { data: current, error: currentError } = await admin
         .from('profiles')
         .select('polar_subscription_id, pro_until')
         .eq('id', userId)
         .maybeSingle();
+    if (currentError) {
+        // Without the current row we can't tell a superseded event from a live
+        // one. Throwing makes the handler answer 500 so Polar retries, which is
+        // safer than guessing and possibly revoking an active subscription.
+        throw new Error(`could not read profile ${userId}: ${currentError.message}`);
+    }
     const onFile = current?.polar_subscription_id;
     const differentSub = !!onFile && onFile !== sub.id;
     const DAY_MS = 24 * 60 * 60 * 1000;

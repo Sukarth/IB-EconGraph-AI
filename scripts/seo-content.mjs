@@ -454,7 +454,7 @@ export const DIAGRAM_PAGES = [
         faq: [
             ['Can I draw both straight and curved PPCs?', 'Yes, the line tool gives constant opportunity cost, the bezier tool gives the standard concave frontier.'],
             ['How do I show economic growth?', 'Duplicate the curve and drag it outward (or ask the AI for "PPC with outward shift showing potential growth").'],
-            ['Is this free for classroom use?', 'Completely, teachers and students can use everything without accounts or licences, and the project is MIT open source.'],
+            ['Is this free for classroom use?', 'Completely, teachers and students can use everything without accounts or licences, and the project is open source under the AGPL-3.0.'],
         ],
         axes: ['Consumer goods', 'Capital goods'],
         diagram: {

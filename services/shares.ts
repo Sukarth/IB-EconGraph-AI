@@ -60,6 +60,34 @@ export function projectSharePayload(project: Project, graphs: Graph[]): ProjectS
     };
 }
 
+/** Postgres unique_violation — the one-share-per-content indexes fired. */
+function isDuplicateShare(error: { code?: string; message?: string }): boolean {
+    return error.code === '23505' || /duplicate key value/i.test(error.message ?? '');
+}
+
+/**
+ * Look up the existing share for a piece of content, keeping "none exists"
+ * distinct from "the lookup failed". Callers that mint a new slug MUST NOT
+ * treat a failure as "none": that would create a second share row for the same
+ * content, and revoking the one the UI shows would leave the other link live.
+ */
+async function findShareId(
+    kind: 'graph' | 'project',
+    column: 'graph_id' | 'project_id',
+    contentId: string,
+): Promise<{ id: string | null; failed: boolean }> {
+    if (!supabase) return { id: null, failed: true };
+    const { data, error } = await supabase
+        .from('shares')
+        .select('id')
+        .eq('kind', kind)
+        .eq(column, contentId)
+        .limit(1)
+        .maybeSingle();
+    if (error) return { id: null, failed: true };
+    return { id: data?.id ?? null, failed: false };
+}
+
 export async function getShareIdForGraph(graphId: string): Promise<string | null> {
     if (!supabase) return null;
     const { data } = await supabase
@@ -86,8 +114,11 @@ export async function getShareIdForProject(projectId: string): Promise<string | 
 
 export async function createOrUpdateGraphShare(userId: string, graph: Graph): Promise<{ id?: string; error?: string }> {
     if (!supabase) return { error: 'Sharing is not available on this deployment.' };
-    const existing = await getShareIdForGraph(graph.id);
-    const id = existing ?? newShareSlug();
+    const existing = await findShareId('graph', 'graph_id', graph.id);
+    if (existing.failed) {
+        return { error: 'Could not check for an existing link right now. Please try again in a moment.' };
+    }
+    const id = existing.id ?? newShareSlug();
     const { error } = await supabase.from('shares').upsert({
         id,
         user_id: userId,
@@ -97,7 +128,16 @@ export async function createOrUpdateGraphShare(userId: string, graph: Graph): Pr
         payload: graphSharePayload(graph),
         updated_at: new Date().toISOString(),
     });
-    if (error) return { error: friendlyShareError(error.message) };
+    if (error) {
+        // Lost a race: another tab created the link between our lookup and this
+        // insert, and the one-share-per-graph index rejected the second slug.
+        // Hand back the link that won rather than surfacing a database error.
+        if (isDuplicateShare(error)) {
+            const winner = await findShareId('graph', 'graph_id', graph.id);
+            if (winner.id) return { id: winner.id };
+        }
+        return { error: friendlyShareError(error.message) };
+    }
     return { id };
 }
 
@@ -107,8 +147,11 @@ export async function createOrUpdateProjectShare(
     graphs: Graph[],
 ): Promise<{ id?: string; error?: string }> {
     if (!supabase) return { error: 'Sharing is not available on this deployment.' };
-    const existing = await getShareIdForProject(project.id);
-    const id = existing ?? newShareSlug();
+    const existing = await findShareId('project', 'project_id', project.id);
+    if (existing.failed) {
+        return { error: 'Could not check for an existing link right now. Please try again in a moment.' };
+    }
+    const id = existing.id ?? newShareSlug();
     const { error } = await supabase.from('shares').upsert({
         id,
         user_id: userId,
@@ -118,7 +161,13 @@ export async function createOrUpdateProjectShare(
         payload: projectSharePayload(project, graphs),
         updated_at: new Date().toISOString(),
     });
-    if (error) return { error: friendlyShareError(error.message) };
+    if (error) {
+        if (isDuplicateShare(error)) {
+            const winner = await findShareId('project', 'project_id', project.id);
+            if (winner.id) return { id: winner.id };
+        }
+        return { error: friendlyShareError(error.message) };
+    }
     return { id };
 }
 
