@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
     ChevronLeft, Key, Eye, EyeOff, Check, AlertTriangle,
-    Download, Upload, BarChart2, Trash2, ExternalLink, Cpu, RefreshCw
+    Download, Upload, BarChart2, Trash2, ExternalLink, Cpu, RefreshCw,
+    Crown, Sparkles
 } from 'lucide-react';
 import {
     getApiKey as getGeminiApiKey,
@@ -24,12 +25,18 @@ import {
 import { AIProvider, getAIProvider, setAIProvider } from '../services/aiProvider';
 import { Graph, Project } from '../types';
 import { ConfirmModal } from './Modal';
+import AccountSection from './AccountSection';
+import { useAuth } from '../services/auth';
+import { SyncState } from '../services/useCloudSync';
 
 interface SettingsPageProps {
     onBack: () => void;
     graphs: Graph[];
     projects: Project[];
     onImportData: (data: { graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] }) => void;
+    syncState: SyncState;
+    onSyncNow: () => void;
+    onOpenPricing: () => void;
 }
 
 const EXPORT_VERSION = 1;
@@ -51,7 +58,11 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     graphs,
     projects,
     onImportData,
+    syncState,
+    onSyncNow,
+    onOpenPricing,
 }) => {
+    const { configured: cloudConfigured, user, isPro } = useAuth();
     const [provider, setProviderState] = useState<AIProvider>(() => getAIProvider());
     const [apiKey, setApiKey] = useState('');
     const [showKey, setShowKey] = useState(false);
@@ -73,6 +84,21 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
     const [openRouterModelsError, setOpenRouterModelsError] = useState<string | null>(null);
 
     const loadProviderState = (p: AIProvider) => {
+        if (p === 'hosted') {
+            // Hosted provider has no key or model selection, server-managed.
+            setApiKey('');
+            setKeyConfigured(false);
+            setSelectedModel('');
+            setAvailableModels([]);
+            setModelsFetched(false);
+            setModelsError(null);
+            setLoadingModels(false);
+            setOpenRouterModels([]);
+            setOpenRouterModelsFetched(false);
+            setOpenRouterModelsError(null);
+            setOpenRouterModelsLoading(false);
+            return;
+        }
         const existingKey = p === 'openrouter' ? getOpenRouterApiKey() : getGeminiApiKey();
         if (existingKey) {
             setApiKey(existingKey);
@@ -309,7 +335,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                 }}
                 onConfirm={confirmImport}
                 title="Import Backup Data"
-                message={`This will replace all your current data with ${pendingImportData?.graphs.length || 0} graph${(pendingImportData?.graphs.length || 0) !== 1 ? 's' : ''} and ${pendingImportData?.projects.length || 0} project${(pendingImportData?.projects.length || 0) !== 1 ? 's' : ''}. This action cannot be undone.`}
+                message={`This will replace all your current diagrams and projects, including any synced from your other devices, with ${pendingImportData?.graphs.length || 0} diagram${(pendingImportData?.graphs.length || 0) !== 1 ? 's' : ''} and ${pendingImportData?.projects.length || 0} project${(pendingImportData?.projects.length || 0) !== 1 ? 's' : ''} from this backup. This can't be undone.`}
                 confirmText="Import"
                 variant="danger"
             />
@@ -338,6 +364,13 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
             </header>
 
             <main className="max-w-3xl mx-auto px-6 py-8 space-y-8">
+                {/* Account & Cloud Section */}
+                <AccountSection
+                    syncState={syncState}
+                    onSyncNow={onSyncNow}
+                    onOpenPricing={onOpenPricing}
+                />
+
                 {/* API Key Section */}
                 <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                     <div className="p-6 border-b border-gray-100">
@@ -363,10 +396,49 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 onChange={(e) => handleProviderChange(e.target.value as AIProvider)}
                                 className="w-full px-4 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm bg-gray-50 transition-all"
                             >
-                                <option value="gemini">Google AI Studio (Gemini)</option>
-                                <option value="openrouter">OpenRouter</option>
+                                <option value="gemini">Google AI Studio (Gemini), your own free key</option>
+                                <option value="openrouter">OpenRouter, your own key</option>
+                                {cloudConfigured && (
+                                    <option value="hosted">EconGraph Cloud, no key needed (Supporter)</option>
+                                )}
                             </select>
                         </div>
+
+                        {/* Hosted provider status */}
+                        {provider === 'hosted' && (
+                            <div className="space-y-3">
+                                {user && isPro ? (
+                                    <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-green-50 text-green-700">
+                                        <Sparkles className="w-4 h-4" />
+                                        Hosted AI is active, no API key needed. Usage is shown in Account &amp; Cloud above.
+                                    </div>
+                                ) : user ? (
+                                    <div className="space-y-3">
+                                        <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-amber-50 text-amber-700">
+                                            <Crown className="w-4 h-4" />
+                                            Hosted AI is part of the Supporter plan ($5/month).
+                                        </div>
+                                        <button
+                                            onClick={onOpenPricing}
+                                            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-lg hover:from-amber-600 hover:to-orange-600 transition-colors text-sm font-medium shadow-sm"
+                                        >
+                                            <Crown className="w-4 h-4" />
+                                            See the Supporter plan
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg bg-amber-50 text-amber-700">
+                                        <AlertTriangle className="w-4 h-4" />
+                                        Sign in above to use hosted AI, or pick a free BYOK provider.
+                                    </div>
+                                )}
+                                <p className="text-xs text-gray-400">
+                                    Prefer full control? Both BYOK providers stay free and unlimited with your own key.
+                                </p>
+                            </div>
+                        )}
+
+                        {provider !== 'hosted' && (<>
                         {/* Status indicator */}
                         <div className={`flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg ${keyConfigured
                             ? 'bg-green-50 text-green-700'
@@ -380,7 +452,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                             ) : (
                                 <>
                                     <AlertTriangle className="w-4 h-4" />
-                                    No API key configured — AI features are disabled
+                                    No API key configured, AI features are disabled
                                 </>
                             )}
                         </div>
@@ -467,10 +539,12 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                                 <ExternalLink className="w-3.5 h-3.5" />
                             </a>
                         </div>
+                        </>)}
                     </div>
                 </section>
 
                 {/* Model Selection Section */}
+                {provider !== 'hosted' && (
                 <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
                     <div className="p-6 border-b border-gray-100">
                         <div className="flex items-center gap-3 mb-1">
@@ -663,6 +737,7 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         )}
                     </div>
                 </section>
+                )}
 
                 {/* Import/Export Section */}
                 <section className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -742,6 +817,33 @@ const SettingsPage: React.FC<SettingsPageProps> = ({
                         )}
                     </div>
                 </section>
+
+                {/* About / source. AGPL-3.0 requires offering the source to
+                    everyone who interacts with the app over a network. */}
+                <footer className="pt-2 pb-8 text-center text-sm text-gray-400 space-y-2">
+                    <p>
+                        IB EconGraph AI is free and open source under the{' '}
+                        <a
+                            href="https://github.com/sukarth/IB-EconGraph-AI/blob/main/LICENSE"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-gray-500 hover:text-gray-700 underline"
+                        >AGPL-3.0 license</a>.
+                    </p>
+                    <p className="flex items-center justify-center gap-x-4 gap-y-1 flex-wrap">
+                        <a
+                            href="https://github.com/sukarth/IB-EconGraph-AI"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-gray-500 hover:text-gray-700"
+                        >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            Source code
+                        </a>
+                        <a href="/privacy" className="text-gray-500 hover:text-gray-700">Privacy</a>
+                        <a href="/terms" className="text-gray-500 hover:text-gray-700">Terms</a>
+                    </p>
+                </footer>
             </main>
         </div>
     );

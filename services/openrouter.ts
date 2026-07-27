@@ -1,32 +1,22 @@
 import { DiagramData } from '../types';
+import { obfuscateKey, deobfuscateKey } from './keyObfuscation';
 
 const STORAGE_KEY = 'econgraph_openrouter_api_key';
 const MODEL_STORAGE_KEY = 'econgraph_openrouter_selected_model';
-
-const OBFUSCATION_PREFIX = 'egk_';
-
-function obfuscate(key: string): string {
-    return OBFUSCATION_PREFIX + btoa(key);
-}
-
-function deobfuscate(stored: string): string {
-    if (!stored.startsWith(OBFUSCATION_PREFIX)) return stored;
-    return atob(stored.slice(OBFUSCATION_PREFIX.length));
-}
 
 export function saveOpenRouterApiKey(key: string): void {
     if (!key.trim()) {
         localStorage.removeItem(STORAGE_KEY);
         return;
     }
-    localStorage.setItem(STORAGE_KEY, obfuscate(key.trim()));
+    localStorage.setItem(STORAGE_KEY, obfuscateKey(key.trim()));
 }
 
 export function getOpenRouterApiKey(): string {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return '';
     try {
-        return deobfuscate(stored);
+        return deobfuscateKey(stored);
     } catch {
         return '';
     }

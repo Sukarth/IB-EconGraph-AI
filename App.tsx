@@ -1,10 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { generateDiagramData, hasApiKey } from './services/ai';
+import { getAIProvider } from './services/aiProvider';
+import { useAuth } from './services/auth';
+import { useCloudSync } from './services/useCloudSync';
+import { recordTombstones, clearTombstones, fetchCloudIds } from './services/sync';
 import DiagramRenderer from './components/DiagramRenderer';
 import LandingPage from './components/LandingPage';
 import HomePage from './components/HomePage';
 import SettingsPage from './components/SettingsPage';
+import PricingPage from './components/PricingPage';
+import ComparePage from './components/ComparePage';
+import { PrivacyPage, TermsPage } from './components/LegalPages';
+import SharedViewPage from './components/SharedViewPage';
+import ShareModal from './components/ShareModal';
+import CloudHistoryModal from './components/CloudHistoryModal';
 import ToolbarLeft from './components/ToolbarLeft';
 import ToolbarRight from './components/ToolbarRight';
 import ComponentLibrary from './components/ComponentLibrary';
@@ -13,7 +23,8 @@ import { usePortalTooltip } from './components/usePortalTooltip';
 import { DiagramData, INITIAL_DIAGRAM, EMPTY_DIAGRAM, Graph, Project, Message, EditorTool, EditorSettings, ComponentTemplate } from './types';
 import {
   Loader2, Send, Plus, MessageSquare, BarChart2,
-  Trash2, Menu, History, RotateCcw, RotateCw, FolderOpen, ChevronLeft, Grid3X3, AlertTriangle, Settings
+  Trash2, Menu, History, RotateCcw, RotateCw, FolderOpen, ChevronLeft, Grid3X3, AlertTriangle, Settings,
+  Share2, CloudDownload
 } from 'lucide-react';
 
 const generateId = () => uuidv4();
@@ -23,7 +34,11 @@ const STORAGE_KEYS = {
   projects: 'econgraph_projects',
   settings: 'econgraph_settings',
   specialColors: 'econgraph_special_colors',
-  standardColors: 'econgraph_standard_colors'
+  standardColors: 'econgraph_standard_colors',
+  // Which account the locally-stored graphs/projects belong to. The store is
+  // global (not per-user), so this lets us detect an account switch on a shared
+  // browser and avoid attributing one person's diagrams to another.
+  owner: 'econgraph_owner'
 };
 
 const DEFAULT_STANDARD_COLORS = [
@@ -55,18 +70,28 @@ const PROJECT_COLORS = [
   '#ec4899', // Pink
 ];
 
-type ViewType = 'landing' | 'home' | 'editor' | 'settings';
+type ViewType = 'landing' | 'home' | 'editor' | 'settings' | 'pricing' | 'compare' | 'shared' | 'privacy' | 'terms';
+
+function parsePath(pathname: string): { view: ViewType; sharedSlug: string | null } {
+  if (pathname === '/home') return { view: 'home', sharedSlug: null };
+  if (pathname === '/editor') return { view: 'editor', sharedSlug: null };
+  if (pathname === '/settings') return { view: 'settings', sharedSlug: null };
+  if (pathname === '/pricing') return { view: 'pricing', sharedSlug: null };
+  if (pathname === '/compare') return { view: 'compare', sharedSlug: null };
+  if (pathname === '/privacy') return { view: 'privacy', sharedSlug: null };
+  if (pathname === '/terms') return { view: 'terms', sharedSlug: null };
+  const shareMatch = pathname.match(/^\/s\/([A-Za-z0-9_-]{6,64})\/?$/);
+  if (shareMatch) return { view: 'shared', sharedSlug: shareMatch[1] };
+  return { view: 'landing', sharedSlug: null }; // default for '/' and unknown paths
+}
+
+/** Why AI generation is unavailable, or null when it's usable. */
+type AiGate = null | 'hosted-signin' | 'hosted-upgrade' | 'byok-nokey';
 
 export default function App() {
   // --- View State ---
-  const [view, setView] = useState<ViewType>(() => {
-    // Initialize view based on URL path
-    const path = window.location.pathname;
-    if (path === '/home') return 'home';
-    if (path === '/editor') return 'editor';
-    if (path === '/settings') return 'settings';
-    return 'landing'; // default to landing for '/' and any other path
-  });
+  const [view, setView] = useState<ViewType>(() => parsePath(window.location.pathname).view);
+  const [sharedSlug, setSharedSlug] = useState<string | null>(() => parsePath(window.location.pathname).sharedSlug);
 
   // --- Data State ---
   const [graphs, setGraphs] = useState<Graph[]>([]);
@@ -127,6 +152,8 @@ export default function App() {
   }>({ visible: false, currentColor: '#3b82f6', onSelect: () => { } });
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [cloudHistoryOpen, setCloudHistoryOpen] = useState(false);
 
   // History for undo/redo
   const [history, setHistory] = useState<DiagramData[]>([]);
@@ -138,6 +165,52 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const { showTooltip: showSendTooltip, hideTooltip: hideSendTooltip, TooltipPortal: SendTooltipPortal } = usePortalTooltip({ delay: 400, placement: 'top' });
+
+  // --- Cloud (accounts + sync are Supporter features; app is fully usable without) ---
+  const { configured: cloudConfigured, user, isPro } = useAuth();
+
+  // Live refs so applyRemote (a stable, dep-free callback) can see the graph
+  // currently open in the editor without being re-created on every edit.
+  const activeGraphIdRef = useRef<string | null>(null);
+  const currentDiagramRef = useRef<DiagramData>(INITIAL_DIAGRAM);
+
+  const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[]) => {
+    setGraphs(remoteGraphs);
+    setProjects(remoteProjects);
+    // If the graph open in the editor was changed by this pull (e.g. edited on
+    // another device), refresh the editor's live copy, otherwise the next
+    // autosave writes our stale currentDiagram back over the newer cloud version.
+    // BUT only when there are no unsaved local edits in flight: a pending
+    // autosave means currentDiagram holds edits not yet written to `graphs`, and
+    // overwriting it here would silently discard them and reset the undo stack.
+    const openId = activeGraphIdRef.current;
+    if (openId && autosaveDebounceRef.current === null) {
+      const incoming = remoteGraphs.find((g) => g.id === openId);
+      if (incoming && JSON.stringify(incoming.diagramData) !== JSON.stringify(currentDiagramRef.current)) {
+        setCurrentDiagram(incoming.diagramData);
+        setHistory([incoming.diagramData]);
+        historyRef.current = [incoming.diagramData];
+        historyIndexRef.current = 0;
+        setHistoryIndex(0);
+      }
+    }
+  }, []);
+
+  const { syncState, syncNow } = useCloudSync({
+    userId: user && isPro ? user.id : null,
+    hasInitialized,
+    graphs,
+    projects,
+    applyRemote,
+  });
+
+  // A signed-in Supporter's local store can be empty simply because the first
+  // cloud pull hasn't landed yet, used below to avoid creating (and syncing
+  // up) a throwaway blank graph before we've heard whether the cloud has data.
+  const awaitingFirstPull =
+    cloudConfigured && !!user && isPro &&
+    syncState.lastSyncedAt === null &&
+    (syncState.status === 'idle' || syncState.status === 'syncing');
 
   // --- Load from localStorage on mount ---
   useEffect(() => {
@@ -178,6 +251,31 @@ export default function App() {
     setHasInitialized(true);
   }, []);
 
+  // --- Guard against cross-account data bleed on a shared browser ---
+  // The local store is global (not per-user). When a DIFFERENT account signs in,
+  // the previous user's diagrams must not be treated as (and synced up into) the
+  // new account. Anonymous local work (no recorded owner) is still migrated to
+  // the first account that signs in; the same user signing back in keeps theirs.
+  useEffect(() => {
+    if (!hasInitialized) return;
+    const uid = user?.id ?? null;
+    if (!uid) return; // signed out: leave local data + owner untouched
+    let owner: string | null = null;
+    try { owner = localStorage.getItem(STORAGE_KEYS.owner); } catch { /* ignore */ }
+    if (owner && owner !== uid) {
+      // Someone else's local data, clear it so it isn't attributed to this
+      // account. Their data is safe in their own cloud (if a Supporter).
+      setGraphs([]);
+      setProjects([]);
+      setActiveGraphId(null);
+    }
+    try { localStorage.setItem(STORAGE_KEYS.owner, uid); } catch { /* ignore */ }
+  }, [user?.id, hasInitialized]);
+
+  // Keep live refs in sync for dep-free callbacks (see applyRemote).
+  useEffect(() => { activeGraphIdRef.current = activeGraphId; }, [activeGraphId]);
+  useEffect(() => { currentDiagramRef.current = currentDiagram; }, [currentDiagram]);
+
   // --- Auto-open most recent graph logic ---
   useEffect(() => {
     // Only run when navigating to editor without an active graph, after initialization
@@ -195,6 +293,9 @@ export default function App() {
       historyRef.current = [mostRecent.diagramData];
       setHistoryIndex(0);
     } else if (graphs.length === 0) {
+      // Wait for the first cloud pull before assuming a Supporter has no graphs
+      //, otherwise we'd create a blank one and sync it up as clutter.
+      if (awaitingFirstPull) return;
       // Create new graph if none exist
       const newGraph: Graph = {
         id: generateId(),
@@ -217,7 +318,7 @@ export default function App() {
       historyRef.current = [newGraph.diagramData];
       setHistoryIndex(0);
     }
-  }, [view, hasInitialized, activeGraphId, graphs.length]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
+  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
   useEffect(() => {
@@ -282,21 +383,46 @@ export default function App() {
   // Listen for browser back/forward navigation
   useEffect(() => {
     const handlePopState = () => {
-      const path = window.location.pathname;
-      if (path === '/home') setView('home');
-      else if (path === '/editor') setView('editor');
-      else if (path === '/settings') setView('settings');
-      else setView('landing');
+      const parsed = parsePath(window.location.pathname);
+      setView(parsed.view);
+      setSharedSlug(parsed.sharedSlug);
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Scroll to bottom of chat
+  // Keep the document title and canonical URL in sync with the SPA route so
+  // content routes (/pricing, /compare) self-canonicalize instead of being
+  // seen as duplicates of the homepage's hardcoded canonical.
+  useEffect(() => {
+    const SITE = 'https://ib-econgraph-ai.vercel.app';
+    const meta: Record<string, { title: string; path: string }> = {
+      landing: { title: 'IB EconGraph AI: Free AI-Powered Economics Diagram Editor', path: '/' },
+      pricing: { title: 'Pricing · Free Forever · IB EconGraph AI', path: '/pricing' },
+      compare: { title: 'How IB EconGraph AI Compares: IB Economics Diagram Tools', path: '/compare' },
+      privacy: { title: 'Privacy Policy · IB EconGraph AI', path: '/privacy' },
+      terms: { title: 'Terms of Service · IB EconGraph AI', path: '/terms' },
+    };
+    // App-only views (home/editor/settings/shared) canonicalize to the homepage.
+    const entry = meta[view] ?? { title: 'IB EconGraph AI: Free Economics Diagram Editor', path: '/' };
+    document.title = entry.title;
+    let link = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'canonical';
+      document.head.appendChild(link);
+    }
+    link.href = SITE + entry.path;
+  }, [view]);
+
+  // Scroll the chat to the bottom when a message is added to the open graph (or
+  // when switching graphs), not on every diagram edit, which also mutates
+  // `graphs` but leaves the message list unchanged.
+  const activeMessageCount = graphs.find(g => g.id === activeGraphId)?.messages.length ?? 0;
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [graphs, activeGraphId]);
+  }, [activeMessageCount, activeGraphId]);
 
   // Cleanup on unmount
   useEffect(() => () => {
@@ -444,6 +570,7 @@ export default function App() {
       danger: true,
       onConfirm: () => {
         setGraphs(prev => prev.filter(g => g.id !== graphId));
+        recordTombstones('graphs', [graphId]);
         if (activeGraphId === graphId) {
           setActiveGraphId(null);
           navigateToView('home');
@@ -457,6 +584,7 @@ export default function App() {
   // (Used for bulk delete where HomePage shows the confirmation)
   const deleteGraphsDirect = useCallback((graphIds: string[]) => {
     setGraphs(prev => prev.filter(g => !graphIds.includes(g.id)));
+    recordTombstones('graphs', graphIds);
     // If active graph is being deleted, go to home
     if (activeGraphId && graphIds.includes(activeGraphId)) {
       setActiveGraphId(null);
@@ -497,9 +625,10 @@ export default function App() {
       danger: true,
       onConfirm: () => {
         setProjects(prev => prev.filter(p => p.id !== projectId));
+        recordTombstones('projects', [projectId]);
         // Unassign graphs from this project
         setGraphs(prev => prev.map(g =>
-          g.projectId === projectId ? { ...g, projectId: undefined } : g
+          g.projectId === projectId ? { ...g, projectId: undefined, lastModified: Date.now() } : g
         ));
         setConfirmModal(c => ({ ...c, visible: false }));
       }
@@ -558,9 +687,20 @@ export default function App() {
     ));
   }, []);
 
-  const handleImportData = useCallback((data: { graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] }) => {
-    setGraphs(data.graphs);
-    setProjects(data.projects);
+  const handleImportData = useCallback(async (data: { graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] }) => {
+    // Import replaces everything, tombstone current items missing from the
+    // backup so cloud sync propagates the replacement instead of undoing it.
+    const importedGraphIds = new Set(data.graphs.map(g => g.id));
+    const importedProjectIds = new Set(data.projects.map(p => p.id));
+    recordTombstones('graphs', graphs.filter(g => !importedGraphIds.has(g.id)).map(g => g.id));
+    recordTombstones('projects', projects.filter(p => !importedProjectIds.has(p.id)).map(p => p.id));
+    // Restored items must win last-write-wins against any wiped/tombstoned
+    // remote rows, and must not collide with a stale tombstone of the same id.
+    const now = Date.now();
+    clearTombstones('graphs', data.graphs.map(g => g.id));
+    clearTombstones('projects', data.projects.map(p => p.id));
+    setGraphs(data.graphs.map(g => ({ ...g, lastModified: now })));
+    setProjects(data.projects.map(p => ({ ...p, lastModified: now })));
     if (data.specialColors && Array.isArray(data.specialColors) && data.specialColors.length >= 2) {
       setSpecialColors(data.specialColors);
     }
@@ -569,7 +709,16 @@ export default function App() {
     }
     // Reset active graph since the data has changed
     setActiveGraphId(null);
-  }, []);
+    // Cloud rows that live only on another device were never in local `graphs`,
+    // so the filter above can't tombstone them, without this, the next sync
+    // pulls them back and the "replace everything" restore silently resurrects
+    // diagrams the backup was meant to drop. Best-effort: null when offline.
+    const cloud = await fetchCloudIds();
+    if (cloud) {
+      recordTombstones('graphs', cloud.graphIds.filter(id => !importedGraphIds.has(id)));
+      recordTombstones('projects', cloud.projectIds.filter(id => !importedProjectIds.has(id)));
+    }
+  }, [graphs, projects]);
 
   const startFromHome = useCallback((projectId?: string) => {
     const graphId = createGraph(projectId);
@@ -602,17 +751,38 @@ export default function App() {
     [activeGraph, projects]
   );
 
+  // Single source of truth for AI-availability gating, shared by the chat
+  // submit guard and the editor warning banner so the two can't drift. Reads
+  // getAIProvider()/hasApiKey() fresh each call to reflect the latest settings.
+  const computeAiGate = useCallback((): AiGate => {
+    if (getAIProvider() === 'hosted') {
+      if (!user) return 'hosted-signin';
+      if (!isPro) return 'hosted-upgrade';
+      return null;
+    }
+    return hasApiKey() ? null : 'byok-nokey';
+  }, [user, isPro]);
+
   const handleSubmit = useCallback(async (e?: React.FormEvent, customPrompt?: string) => {
     if (e) e.preventDefault();
     const promptText = customPrompt || prompt;
     if (!promptText.trim() || !activeGraphId) return;
 
-    // Check for API key before sending
-    if (!hasApiKey()) {
+    // Check the AI provider is usable before sending
+    const gate = computeAiGate();
+    const aiBlockedMessage =
+      gate === 'hosted-signin'
+        ? 'Sign in (Settings > Account) to use hosted AI, or switch to a free provider with your own API key.'
+        : gate === 'hosted-upgrade'
+          ? 'Hosted AI is part of the Supporter plan. Upgrade on the Pricing page, or use your own free API key in Settings.'
+          : gate === 'byok-nokey'
+            ? 'API key not configured. Please add your API key in Settings before using AI features.'
+            : null;
+    if (aiBlockedMessage) {
       const errorMsg: Message = {
         id: generateId(),
         role: 'model',
-        content: "API key not configured. Please add your API key in Settings before using AI features.",
+        content: aiBlockedMessage,
         timestamp: Date.now()
       };
       setGraphs(prev => prev.map(g => {
@@ -649,11 +819,19 @@ export default function App() {
       const history = activeGraph?.messages.map(m => `${m.role}: ${m.content}`) || [];
       const result = await generateDiagramData(promptText, history);
 
+      // Only let the AI name the graph while it still has the default title.
+      // Once the user has renamed it, that name is theirs and a later
+      // generation must not silently overwrite it.
+      const userNamed = !!activeGraph
+        && activeGraph.title.trim() !== ''
+        && activeGraph.title !== EMPTY_DIAGRAM.title;
+      const nextDiagram = userNamed ? { ...result, title: activeGraph!.title } : result;
+
       const aiMsg: Message = {
         id: generateId(),
         role: 'model',
         content: `Here is the diagram for "${promptText}". You can drag points to adjust curves or double click labels to edit them.`,
-        diagramData: result,
+        diagramData: nextDiagram,
         timestamp: Date.now()
       };
 
@@ -662,15 +840,15 @@ export default function App() {
           return {
             ...g,
             messages: [...g.messages, aiMsg],
-            diagramData: result,
-            title: result.title,
+            diagramData: nextDiagram,
+            title: nextDiagram.title,
             lastModified: Date.now()
           };
         }
         return g;
       }));
-      setCurrentDiagram(result);
-      pushToHistory(result);
+      setCurrentDiagram(nextDiagram);
+      pushToHistory(nextDiagram);
 
     } catch (err) {
       const message = err instanceof Error
@@ -691,7 +869,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeGraphId, activeGraph, prompt, pushToHistory, setGraphs]);
+  }, [activeGraphId, activeGraph, prompt, pushToHistory, setGraphs, computeAiGate]);
 
   const handleNewChat = useCallback(() => {
     if (!activeGraphId) return;
@@ -815,6 +993,14 @@ export default function App() {
       newData.annotatedPoints = [...newData.annotatedPoints, ...newPoints];
     }
 
+    if (template.data.textLabels && template.data.textLabels.length > 0) {
+      const newLabels = template.data.textLabels.map(l => ({
+        ...l,
+        id: `label-${generateId()}`
+      }));
+      newData.textLabels = [...(newData.textLabels ?? []), ...newLabels];
+    }
+
     handleDataChange(newData);
   };
 
@@ -883,11 +1069,74 @@ export default function App() {
     "Perfect Competition Long Run"
   ];
 
+  // Provider-aware AI availability (drives the editor warning banner). Uses the
+  // same computeAiGate() discriminant as the chat submit guard above.
+  const aiGate = computeAiGate();
+  const aiWarning: { title: string; body: React.ReactNode } | null =
+    aiGate === 'hosted-signin'
+      ? {
+        title: 'Sign in to use hosted AI',
+        body: <>Hosted AI needs an account. Sign in from{' '}
+          <button onClick={() => navigateToView('settings')} className="underline font-medium hover:text-amber-800">Settings</button>
+          {' '}or switch to a free provider with your own key.</>
+      }
+      : aiGate === 'hosted-upgrade'
+        ? {
+          title: 'Hosted AI is a Supporter feature',
+          body: <>See the{' '}
+            <button onClick={() => navigateToView('pricing')} className="underline font-medium hover:text-amber-800">Supporter plan</button>
+            , or keep generating free with your own key in{' '}
+            <button onClick={() => navigateToView('settings')} className="underline font-medium hover:text-amber-800">Settings</button>.</>
+        }
+        : aiGate === 'byok-nokey'
+          ? {
+            title: 'API key not configured',
+            body: <>Add your API key in{' '}
+              <button onClick={() => navigateToView('settings')} className="underline font-medium hover:text-amber-800">Settings</button>
+              {' '}to use AI features.</>
+          }
+          : null;
+
   // --- Render Views ---
+  if (view === 'shared' && sharedSlug) {
+    return (
+      <SharedViewPage
+        slug={sharedSlug}
+        onGoHome={() => navigateToView('landing')}
+      />
+    );
+  }
+
+  if (view === 'pricing') {
+    return (
+      <PricingPage
+        onOpenEditor={() => navigateToView('home')}
+        onOpenLanding={() => navigateToView('landing')}
+        onOpenCompare={() => navigateToView('compare')}
+        onOpenSettings={() => navigateToView('settings')}
+      />
+    );
+  }
+
+  if (view === 'compare') {
+    return (
+      <ComparePage
+        onOpenEditor={() => navigateToView('home')}
+        onOpenLanding={() => navigateToView('landing')}
+        onOpenPricing={() => navigateToView('pricing')}
+      />
+    );
+  }
+
+  if (view === 'privacy') return <PrivacyPage />;
+  if (view === 'terms') return <TermsPage />;
+
   if (view === 'landing') {
     return (
       <LandingPage
         onGoHome={() => navigateToView('home')}
+        onOpenPricing={() => navigateToView('pricing')}
+        onOpenCompare={() => navigateToView('compare')}
       />
     );
   }
@@ -938,6 +1187,9 @@ export default function App() {
         graphs={graphs}
         projects={projects}
         onImportData={handleImportData}
+        syncState={syncState}
+        onSyncNow={syncNow}
+        onOpenPricing={() => navigateToView('pricing')}
       />
     );
   }
@@ -981,6 +1233,23 @@ export default function App() {
         svgUrl={downloadUrl}
         title={currentDiagram.title}
         description={currentDiagram.summary}
+      />
+      <ShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        graph={activeGraph}
+        onOpenSettings={() => navigateToView('settings')}
+        onOpenPricing={() => navigateToView('pricing')}
+      />
+      <CloudHistoryModal
+        isOpen={cloudHistoryOpen}
+        onClose={() => setCloudHistoryOpen(false)}
+        graph={activeGraph}
+        onRestore={(diagramData) => {
+          setCurrentDiagram(diagramData);
+          pushToHistory(diagramData);
+          scheduleAutosave(diagramData);
+        }}
       />
 
       <div className="flex h-screen w-full bg-gray-50 text-gray-900 overflow-hidden font-sans">
@@ -1091,6 +1360,25 @@ export default function App() {
               </button>
             </div>
             <div className="flex items-center gap-2">
+              {cloudConfigured && (
+                <>
+                  <button
+                    onClick={() => setCloudHistoryOpen(true)}
+                    title="Cloud version history"
+                    className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <CloudDownload className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setShareModalOpen(true)}
+                    title="Share a view-only link"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md border border-gray-300"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    <span className="hidden md:inline">Share</span>
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => navigateToView('settings')}
                 className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1129,6 +1417,7 @@ export default function App() {
               isOpen={isComponentLibraryOpen}
               onClose={() => setComponentLibraryOpen(false)}
               onAddComponent={handleAddComponent}
+              currentDiagram={currentDiagram}
             />
 
             {/* Center: Graph Canvas */}
@@ -1213,22 +1502,13 @@ export default function App() {
             >
               {isAIPanelOpen && (
                 <>
-                  {/* API Key Warning */}
-                  {!hasApiKey() && (
+                  {/* AI availability warning */}
+                  {aiWarning && (
                     <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                       <div>
-                        <p className="text-sm text-amber-800 font-medium">API key not configured</p>
-                        <p className="text-xs text-amber-600 mt-0.5">
-                          Add your API key in{' '}
-                          <button
-                            onClick={() => navigateToView('settings')}
-                            className="underline font-medium hover:text-amber-800"
-                          >
-                            Settings
-                          </button>{' '}
-                          to use AI features.
-                        </p>
+                        <p className="text-sm text-amber-800 font-medium">{aiWarning.title}</p>
+                        <p className="text-xs text-amber-600 mt-0.5">{aiWarning.body}</p>
                       </div>
                     </div>
                   )}

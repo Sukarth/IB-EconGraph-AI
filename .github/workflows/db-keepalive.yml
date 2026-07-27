@@ -1,0 +1,47 @@
+name: DB keepalive
+
+# Supabase free-tier projects pause after 7 days of inactivity. This makes a
+# cheap read against the database every ~5 days to keep it awake, leaving a
+# safe margin under the 7-day pause window.
+#
+# Reuses the same repository secrets as the supporters workflow
+# (Settings, then Secrets and variables, then Actions):
+#   SUPABASE_URL         your Supabase project URL
+#   SUPABASE_SECRET_KEY  the Supabase secret key (sb_secret_...)
+
+on:
+  schedule:
+    # Runs on days 1,6,11,16,21,26,31 -> a gap of at most 5 days, always under 7.
+    - cron: '0 6 */5 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: db-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the database
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_SECRET_KEY" ]; then
+            echo "Supabase secrets are not set; nothing to ping."
+            exit 0
+          fi
+          # One-row read via PostgREST. The secret key bypasses RLS, so this is a
+          # trivial query that still counts as real database activity.
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: $SUPABASE_SECRET_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SECRET_KEY")
+          echo "Supabase responded: HTTP $code"
+          # 200 (rows) and 206 (partial content) both mean the query was served.
+          if [ "$code" != "200" ] && [ "$code" != "206" ]; then
+            echo "Unexpected status $code; keepalive may have failed."
+            exit 1
+          fi
+          echo "Keepalive ping OK."
