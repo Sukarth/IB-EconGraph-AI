@@ -396,23 +396,29 @@ export default function App() {
     // an empty library, creates a blank diagram and syncs it up, and the adopted
     // graphs then replace it locally while the stray row stays in the cloud.
     setAdoptingGuestWork(true);
-    let cancelled = false;
+    const adoptingInto = storeScope;
     void (async () => {
       try {
-        const adopted = await adoptScope(GUEST_SCOPE, storeScope);
+        const adopted = await adoptScope(GUEST_SCOPE, adoptingInto);
         // null means the copy failed and the work is still in the guest
         // namespace. Leave this account empty rather than showing diagrams that
         // were not actually saved to it.
-        if (cancelled || !adopted) return;
+        if (!adopted) return;
+        // Deliberately NOT an effect-scoped `cancelled` flag. Setting
+        // `pendingGuestAdoption` above re-runs this effect, which would trip
+        // such a flag immediately, and by then adoptScope has already emptied
+        // the guest namespace: dropping the result would leave the diagrams
+        // written to disk but absent from state, and the auto-open below would
+        // overwrite them with a blank one. The only reason to withhold them is
+        // that a different account is live now, and they are safe on disk in
+        // `adoptingInto` for when it comes back.
+        if (loadedScopeRef.current !== adoptingInto) return;
         setGraphs(adopted.graphs);
         setProjects(adopted.projects);
       } finally {
-        // Unconditional: a cancelled run that left this set would hold the
-        // editor empty for the rest of the session.
         setAdoptingGuestWork(false);
       }
     })();
-    return () => { cancelled = true; };
   }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, firstPullFailed, graphs.length, projects.length]);
 
   // Keep live refs in sync for dep-free callbacks (see applyRemote).
