@@ -138,7 +138,10 @@ export default defineConfig(({ mode, command }) => {
             // Allow access through public dev tunnels (used for testing the
             // Polar webhook/redirect against a real HTTPS origin). Vite otherwise
             // rejects non-localhost Host headers with "This host is not allowed".
-            allowedHosts: ['.devtunnels.ms', '.ngrok-free.app', '.trycloudflare.com'],
+            // Keep in step with DEV_TUNNEL_SUFFIXES in api/_lib/polar.ts: a host
+            // that one accepts and the other rejects fails only after Polar
+            // redirects back, which is the least helpful moment to find out.
+            allowedHosts: ['.devtunnels.ms', '.ngrok-free.app', '.ngrok.app', '.trycloudflare.com'],
         },
         plugins: [react(), devApiPlugin(__dirname)],
         // No `define` for GEMINI_API_KEY on purpose: it would inline the server's

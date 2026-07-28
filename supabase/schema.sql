@@ -234,8 +234,13 @@ where not exists (select 1 from public.graphs g where g.id = v.graph_id);
 
 do $$
 begin
+  -- Scoped to the table: constraint names are unique per table, not per
+  -- database, so an unqualified lookup can match something else entirely and
+  -- skip adding the foreign key this block exists to add.
   if not exists (
-    select 1 from pg_constraint where conname = 'graph_versions_graph_id_fkey'
+    select 1 from pg_constraint
+    where conname = 'graph_versions_graph_id_fkey'
+      and conrelid = 'public.graph_versions'::regclass
   ) then
     alter table public.graph_versions
       add constraint graph_versions_graph_id_fkey
