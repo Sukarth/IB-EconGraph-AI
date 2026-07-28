@@ -63,11 +63,15 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
 
     // Hosted usage meter
     useEffect(() => {
-        if (user && isPro) {
-            fetchHostedUsage().then(setUsage);
-        } else {
+        if (!user || !isPro) {
             setUsage(null);
+            return;
         }
+        // Ignore a response that arrives after the account changed, otherwise
+        // the meter can show the previous account's generation count.
+        let cancelled = false;
+        fetchHostedUsage().then((u) => { if (!cancelled) setUsage(u); });
+        return () => { cancelled = true; };
     }, [user, isPro]);
 
     // Checkout return flow: ?checkout=success → poll until webhook lands

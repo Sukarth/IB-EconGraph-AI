@@ -45,12 +45,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
     }
 
-    // Try to cancel whenever a subscription id is on file, without trusting our
-    // own pro_status: if that column is stale (a missed webhook), gating on it
+    // Ask Polar what this user actually has, rather than trusting our own row.
+    // A profile can be missing entirely, or its subscription id can be stale
+    // because a webhook was never delivered; in either case gating on our copy
     // would skip cancellation and leave a live subscription billing a deleted
-    // account. Revoking something already inactive is handled below.
-    if (profile?.polar_subscription_id) {
-        const subId = profile.polar_subscription_id;
+    // account. Polar is the authority, so query it by external customer id.
+    let liveSubscriptionIds: string[];
+    try {
+        const page = await getPolar().subscriptions.list({ externalCustomerId: user.id, active: true });
+        const ids = new Set<string>();
+        for await (const chunk of page) {
+            for (const sub of chunk.result.items) {
+                if (ACTIVE_STATUSES.has(sub.status ?? '')) ids.add(sub.id);
+            }
+        }
+        // Belt and braces: cancel anything our own row knows about too, in case
+        // Polar's active filter and our status set ever disagree.
+        if (profile?.polar_subscription_id) ids.add(profile.polar_subscription_id);
+        liveSubscriptionIds = [...ids];
+    } catch (err) {
+        // Includes "Polar isn't configured on this deployment", which is a
+        // server problem: don't tell the user to go cancel something manually.
+        console.error('delete-account: could not list subscriptions', err);
+        return res.status(503).json({
+            error: 'Could not verify your billing status right now. Please try again in a moment.',
+        });
+    }
+
+    for (const subId of liveSubscriptionIds) {
         try {
             await getPolar().subscriptions.revoke({ id: subId });
         } catch (err) {

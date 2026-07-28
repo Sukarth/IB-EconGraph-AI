@@ -23,8 +23,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(401).json({ error: 'Please sign in first.' });
     }
 
+    // Resolve the client outside the try: a missing POLAR_ACCESS_TOKEN is a
+    // deployment problem, not "you have no billing account", and telling the
+    // user to wait and retry would send them in circles.
+    let polar;
     try {
-        const polar = getPolar();
+        polar = getPolar();
+    } catch (err) {
+        console.error('portal: Polar is not configured', err);
+        return res.status(503).json({ error: 'Billing is not configured on this deployment.' });
+    }
+
+    try {
         const session = await polar.customerSessions.create({
             externalCustomerId: user.id,
         });

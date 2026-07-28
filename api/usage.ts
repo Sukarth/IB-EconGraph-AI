@@ -26,8 +26,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(401).json({ error: 'Not signed in.' });
     }
 
+    // A lookup failure must not read as "not a Supporter": the caller would show
+    // a lapsed plan to someone whose plan is fine. Distinguish it from a genuine
+    // null profile by capturing the error.
+    let profileFailed = false;
     const [profile, usageResult] = await Promise.all([
-        getProfile(user.id).catch(() => null),
+        getProfile(user.id).catch((err) => {
+            console.error('usage: profile lookup failed', err);
+            profileFailed = true;
+            return null;
+        }),
         getSupabaseAdmin()
             .from('ai_usage')
             .select('count')
@@ -41,6 +49,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (usageResult.error) {
         console.error('usage: failed to read ai_usage', usageResult.error);
         return res.status(503).json({ error: 'Usage service is temporarily unavailable.' });
+    }
+    if (profileFailed) {
+        return res.status(503).json({ error: 'Could not confirm your plan right now. Please try again in a moment.' });
     }
 
     const used = usageResult.data?.count ?? 0;

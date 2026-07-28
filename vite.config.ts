@@ -24,6 +24,14 @@ function devApiPlugin(root: string): Plugin {
 
                 const parsed = new URL(req.url, 'http://localhost');
                 const rel = parsed.pathname.replace(/^\/api\//, '').replace(/\/+$/, '');
+                // `/api/../../secret` would otherwise escape the api directory
+                // through path.join. Only plain nested route segments are valid.
+                if (!/^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)*$/.test(rel)) {
+                    res.statusCode = 404;
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ error: `No API route for ${parsed.pathname}` }));
+                    return;
+                }
                 const variants = [
                     { abs: path.join(root, 'api', `${rel}.ts`), id: `/api/${rel}.ts` },
                     { abs: path.join(root, 'api', rel, 'index.ts'), id: `/api/${rel}/index.ts` },
@@ -83,10 +91,22 @@ function devApiPlugin(root: string): Plugin {
     };
 }
 
+/** Cap the dev-server body so one oversized request can't exhaust the process. */
+const MAX_DEV_BODY_BYTES = 2 * 1024 * 1024;
+
 function readJsonBody(req: any): Promise<unknown> {
     return new Promise((resolve) => {
         const chunks: Buffer[] = [];
-        req.on('data', (c: Buffer) => chunks.push(c));
+        let size = 0;
+        req.on('data', (c: Buffer) => {
+            size += c.length;
+            if (size > MAX_DEV_BODY_BYTES) {
+                req.destroy();
+                resolve(undefined);
+                return;
+            }
+            chunks.push(c);
+        });
         req.on('end', () => {
             if (chunks.length === 0) return resolve(undefined);
             const raw = Buffer.concat(chunks).toString('utf8');

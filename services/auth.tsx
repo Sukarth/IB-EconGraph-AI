@@ -121,6 +121,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (newUserId !== userIdRef.current) {
                 if (!newUserId) clearTemplateCache(); // signed out / expired elsewhere
                 userIdRef.current = newUserId;
+                // Drop the old profile immediately. Leaving it in place until the
+                // replacement query resolves shows the previous account's name
+                // and Supporter status under the new session.
+                setProfile(null);
                 fetchProfile(newUserId);
             }
         });

@@ -173,8 +173,16 @@ export async function createOrUpdateProjectShare(
 
 export async function revokeShare(shareId: string): Promise<{ error?: string }> {
     if (!supabase) return { error: 'Sharing is not available on this deployment.' };
-    const { error } = await supabase.from('shares').delete().eq('id', shareId);
-    return error ? { error: error.message } : {};
+    // Ask for the deleted row back. The delete policy is scoped to the owner, so
+    // an id that doesn't match (or an RLS denial) removes nothing and still
+    // reports success. Telling someone their link is revoked while it keeps
+    // resolving is the worst possible outcome here.
+    const { data, error } = await supabase.from('shares').delete().eq('id', shareId).select('id');
+    if (error) return { error: error.message };
+    if (!data || data.length === 0) {
+        return { error: 'Could not revoke that link. Please reload and try again.' };
+    }
+    return {};
 }
 
 /**

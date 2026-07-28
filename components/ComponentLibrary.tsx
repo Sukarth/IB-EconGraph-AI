@@ -74,13 +74,20 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
         }
         setCustomTemplates(listCachedTemplates(user.id));
         if (isOpen && isPro) {
-            fetchCustomTemplates(user.id).then(setCustomTemplates);
+            // Drop a response that lands after sign-out or an account switch,
+            // which would otherwise repopulate the library from the old account.
+            let cancelled = false;
+            fetchCustomTemplates(user.id).then((t) => { if (!cancelled) setCustomTemplates(t); });
+            return () => { cancelled = true; };
         }
     }, [isOpen, user, isPro]);
 
     if (!isOpen) return null;
 
     const handleSaveTemplate = async () => {
+        // The button is disabled for these, but Enter in the name field calls
+        // this directly, so repeated presses could create duplicate templates.
+        if (saving || !saveName.trim()) return;
         if (!user) {
             setSaveError('Sign in (Settings) to save templates.');
             return;
