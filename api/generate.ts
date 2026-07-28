@@ -18,7 +18,16 @@ const MAX_PROMPT_CHARS = 4000;
 const MAX_HISTORY_ENTRIES = 40;
 const MAX_HISTORY_CHARS = 24000;
 
-type AiConfig = { ai: GoogleGenAI; model: string; mode: string };
+/**
+ * Bound the upstream model call. Without this the only limit is the platform
+ * function timeout, which kills the process outright, so the refund below never
+ * runs and the user loses a credit for a generation they never received.
+ * Must stay comfortably under the `maxDuration` set for this route in
+ * `vercel.json`.
+ */
+const MODEL_TIMEOUT_MS = 30_000;
+
+type AiConfig = { ai: GoogleGenAI; model: string };
 
 /**
  * Resolve the hosted-AI client from environment. Three supported backends, in
@@ -36,13 +45,26 @@ type AiConfig = { ai: GoogleGenAI; model: string; mode: string };
  * Returns null if none is configured. Note: "Vertex AI" was renamed
  * "Gemini Enterprise Agent Platform" in 2026; the SDK flag (vertexai: true)
  * is unchanged.
+ *
+ * The result is memoised at module scope: the config comes only from
+ * environment variables, which cannot change within a warm serverless
+ * container, so rebuilding the client (and re-parsing the service-account JSON)
+ * on every request is pure overhead.
  */
+let cachedAiConfig: AiConfig | null | undefined;
+
 function resolveAiClient(): AiConfig | null {
+    if (cachedAiConfig !== undefined) return cachedAiConfig;
+    cachedAiConfig = buildAiClient();
+    return cachedAiConfig;
+}
+
+function buildAiClient(): AiConfig | null {
     const model = process.env.HOSTED_AI_MODEL || 'gemini-2.5-flash';
 
     const vertexApiKey = process.env.VERTEX_API_KEY;
     if (vertexApiKey) {
-        return { ai: new GoogleGenAI({ vertexai: true, apiKey: vertexApiKey }), model, mode: 'vertex-express' };
+        return { ai: new GoogleGenAI({ vertexai: true, apiKey: vertexApiKey }), model };
     }
 
     const project = process.env.GOOGLE_CLOUD_PROJECT || process.env.VERTEX_PROJECT_ID;
@@ -60,12 +82,12 @@ function resolveAiClient(): AiConfig | null {
                 console.error('generate: GOOGLE_SERVICE_ACCOUNT_JSON is not valid JSON; falling back to ADC.');
             }
         }
-        return { ai: new GoogleGenAI(opts), model, mode: 'vertex' };
+        return { ai: new GoogleGenAI(opts), model };
     }
 
     const geminiKey = process.env.GEMINI_API_KEY;
     if (geminiKey) {
-        return { ai: new GoogleGenAI({ apiKey: geminiKey }), model, mode: 'ai-studio' };
+        return { ai: new GoogleGenAI({ apiKey: geminiKey }), model };
     }
 
     return null;
@@ -167,6 +189,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     let responseText: string;
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), MODEL_TIMEOUT_MS);
     try {
         const { ai, model } = aiConfig;
         const response = await ai.models.generateContent({
@@ -177,22 +201,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 responseMimeType: 'application/json',
                 responseSchema: GEMINI_DIAGRAM_SCHEMA,
                 temperature: 0.2,
+                abortSignal: abort.signal,
             },
         });
         responseText = response.text || '{}';
     } catch (err) {
-        // The upstream call itself failed, no generation was produced (and we
-        // weren't billed), so it's fair to refund the metered credit. This is
-        // the ONLY refund path: a response that comes back but fails to parse
-        // below still counts as a used generation, so it can't be farmed to
-        // burn the hosted key for free.
-        console.error('generate: Gemini call failed', err);
+        // The upstream call failed or timed out, so no diagram reached the user
+        // and the metered credit is refunded. This is the ONLY refund path: a
+        // response that comes back but fails to parse below still counts as a
+        // used generation, so it can't be farmed to burn the hosted key for
+        // free. (On a timeout the provider may still bill us upstream, since
+        // aborting is client-side only, but charging the user for nothing they
+        // received would be worse.)
+        console.error(
+            abort.signal.aborted
+                ? `generate: Gemini call exceeded ${MODEL_TIMEOUT_MS}ms and was aborted`
+                : 'generate: Gemini call failed',
+            err,
+        );
         await admin
             .rpc('refund_ai_usage', { p_user: user.id, p_month: month })
             .then(({ error }) => {
                 if (error) console.error('generate: refund failed', error);
             });
-        return res.status(502).json({ error: 'The AI generation failed. Please try again.' });
+        return res.status(502).json({
+            error: abort.signal.aborted
+                ? 'The AI took too long to respond. Please try again.'
+                : 'The AI generation failed. Please try again.',
+        });
+    } finally {
+        clearTimeout(timer);
     }
 
     try {

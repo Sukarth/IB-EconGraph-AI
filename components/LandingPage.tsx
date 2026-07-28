@@ -673,7 +673,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                                 {
                                     icon: <GraduationCap className="w-6 h-6" />,
                                     title: 'Full IB Curriculum',
-                                    desc: 'Covers all the IB Economics topics: micro, macro and international economics.',
+                                    desc: 'Covers all the IB Economics topics: micro, macro, international and development economics.',
                                     color: 'text-amber-600 bg-amber-100',
                                 },
                             ].map((item, i) => (

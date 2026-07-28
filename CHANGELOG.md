@@ -90,5 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Box select and eraser tools
 - Pan and zoom controls
 
-[1.1.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.0
-[1.0.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.0.0
+<!--
+Version headings are intentionally unlinked: no git tags or GitHub releases
+exist yet, so `releases/tag/vX.Y.Z` links would 404. Add the link definitions
+back once the versions are tagged.
+-->

@@ -34,7 +34,10 @@ jobs:
           fi
           # One-row read via PostgREST. The secret key bypasses RLS, so this is a
           # trivial query that still counts as real database activity.
+          # Bound the request: without a timeout a hung connection would stall
+          # the job until GitHub's 6h default runner limit.
           code=$(curl -s -o /dev/null -w '%{http_code}' \
+            --connect-timeout 15 --max-time 60 --retry 2 --retry-delay 5 \
             "$SUPABASE_URL/rest/v1/profiles?select=id&limit=1" \
             -H "apikey: $SUPABASE_SECRET_KEY" \
             -H "Authorization: Bearer $SUPABASE_SECRET_KEY")

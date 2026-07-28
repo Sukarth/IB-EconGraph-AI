@@ -36,7 +36,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "dev:api": "vercel dev --listen 4000",
+    "dev:api": "npx vercel dev --listen 4000",
     "build": "vite build && node scripts/generate-seo-pages.mjs",
     "preview": "vite preview"
   },

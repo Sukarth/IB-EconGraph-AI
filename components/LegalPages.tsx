@@ -207,7 +207,8 @@ export const TermsPage: React.FC = () => (
                 Hosted AI generation is included with the Supporter plan up to a monthly limit (currently 150
                 generations). It's for normal, personal use in creating economics diagrams. Automated abuse,
                 reselling, or attempts to extract or overuse the underlying AI service may be rate-limited or
-                suspended. You can always switch to your own free API key for unlimited generations.
+                suspended. You can always switch to your own API key instead. Bring-your-own-key generation is
+                not metered by this app, but it stays subject to your provider's own limits, usage rules and costs.
             </P>
         </section>
 

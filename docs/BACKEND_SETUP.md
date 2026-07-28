@@ -98,7 +98,7 @@ Agent Platform* in 2026, but the API is the same. Express mode gives you a singl
 API key with no service account, so it just works on serverless. Create the key
 in the Google Cloud console (express mode), then set:
 
-```
+```dotenv
 VERTEX_API_KEY=...            # Vertex express-mode API key
 HOSTED_AI_MONTHLY_LIMIT=150
 HOSTED_AI_MODEL=gemini-2.5-flash
@@ -118,7 +118,7 @@ server authenticates with your gcloud Application Default Credentials, so run
 must also create a service account with the *Vertex AI User* role and paste its
 key JSON, as a single line, into `GOOGLE_SERVICE_ACCOUNT_JSON`:
 
-```
+```dotenv
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=global
 GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account", ...}   # Vercel only
@@ -129,7 +129,7 @@ HOSTED_AI_MODEL=gemini-2.5-flash
 **Option C — Gemini Developer API (Google AI Studio).** The simplest fully-free
 option. Get a key at <https://aistudio.google.com/apikey>:
 
-```
+```dotenv
 GEMINI_API_KEY=...            # Google AI Studio key
 HOSTED_AI_MONTHLY_LIMIT=150
 HOSTED_AI_MODEL=gemini-2.5-flash
@@ -161,8 +161,9 @@ through Google Cloud; AI Studio (C) has a free tier.
 5. Polar acts as **merchant of record**, so EU VAT is handled for you.
 
 The webhook keeps `profiles.pro_status` / `pro_until` in sync. Entitlement =
-`pro_until > now()`; the server grants a 3-day grace period past each billing
-period end so renewals never cause flapping.
+`pro_until > now()`; the server grants a 1-day grace period past each billing
+period end so renewals never cause flapping. (`ACTIVE_MARGIN_DAYS` in
+`api/webhooks/polar.ts`.)
 
 ## 4. Vercel environment variables — summary
 
@@ -185,6 +186,16 @@ period end so renewals never cause flapping.
 | `POLAR_PRODUCT_ID_YEARLY` | server | yearly product |
 | `POLAR_SERVER` | server | `production` or `sandbox` |
 | `APP_URL` | server | canonical site URL for checkout redirects |
+| `ALLOWED_ORIGINS` | server | *optional*, comma-separated extra origins allowed as checkout redirect targets |
+
+Checkout success/cancel URLs are handed to Polar, which redirects the browser
+there after payment, so they are never taken straight from the request's
+`Origin`/`Host` header. An origin is accepted only if it matches `APP_URL` or an
+entry in `ALLOWED_ORIGINS`; outside production (`NODE_ENV !== 'production'`),
+localhost and the dev-tunnel providers listed in `api/_lib/polar.ts` are also
+accepted. Anything else falls back to `APP_URL`. A self-hosted production
+deployment serving more than one domain must list the extras in
+`ALLOWED_ORIGINS`.
 
 ## 5. Testing the full flow
 
@@ -193,8 +204,11 @@ period end so renewals never cause flapping.
 > `/api/checkout`, `/api/usage`, etc. work on `http://localhost:4000` with no
 > Vercel CLI needed — it reads your local `.env` for the server-side vars. For
 > local checkout redirects, set `APP_URL=http://localhost:4000`.
-> (`npm run dev:api` = `vercel dev` is an alternative that runs the real Vercel
-> runtime, but it needs `vercel login`/`link` and is finicky on Windows + Node 24.)
+> (`npm run dev:api` = `npx vercel dev` is an alternative that runs the real
+> Vercel runtime. The CLI is deliberately *not* in `devDependencies` — it is a
+> large install that most contributors never need — so `npx` fetches it on
+> first use. It also needs `vercel login`/`link` and is finicky on
+> Windows + Node 24.)
 >
 > **Webhook reachability:** the entitlement flip to Supporter is driven by the
 > Polar `subscription.*` webhook, and Polar (even in sandbox) can only reach a

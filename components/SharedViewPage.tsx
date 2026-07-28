@@ -169,8 +169,8 @@ const SharedViewPage: React.FC<SharedViewPageProps> = ({ slug, onGoHome }) => {
                 Made with{' '}
                 <button onClick={onGoHome} className="text-blue-600 hover:underline font-medium">
                     IB EconGraph AI
-                </button>{' '}
-               , the free, open-source economics diagram editor for IB students.
+                </button>
+                , the free, open-source economics diagram editor for IB students.
             </footer>
         </div>
     );

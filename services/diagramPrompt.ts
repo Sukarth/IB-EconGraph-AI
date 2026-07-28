@@ -11,7 +11,7 @@ export const DIAGRAM_SYSTEM_INSTRUCTION = `
   1. Coordinate System: Use a logical scale (e.g., 0-10 or 0-100). Keep it consistent.
   2. Accuracy: Calculate intersection points mathematically. If Supply is P = 10 + Q and Demand is P = 100 - Q, Equilibrium is Q=45, P=55.
   3. Shared Coordinates (CRITICAL):
-     - If an equilibrium point E is at (50, 50), ensuring the Supply Curve, Demand Curve, and any Shaded Regions ALL use the exact coordinate (50, 50).
+     - If an equilibrium point E is at (50, 50), ensure the Supply Curve, Demand Curve, and any Shaded Regions ALL use the exact coordinate (50, 50).
      - Do not approximate. If a shaded region (e.g., Consumer Surplus) is bounded by the Price axis, Demand curve, and Equilibrium price, the vertices must strictly match the curve points.
   4. Shading:
      - Provide a closed polygon for shaded areas.
