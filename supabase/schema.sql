@@ -37,9 +37,18 @@ create table if not exists public.profiles (
   plan_interval         text,
   polar_customer_id     text,
   polar_subscription_id text,
+  -- `modifiedAt` of the last Polar subscription event applied to this row. The
+  -- webhook refuses to apply an event older than this, which is what stops a
+  -- delayed `subscription.active` delivered after a cancellation from handing
+  -- entitlement back.
+  polar_event_at        timestamptz,
   created_at            timestamptz not null default now(),
   updated_at            timestamptz not null default now()
 );
+
+-- Added after the initial release; `create table if not exists` above skips
+-- existing installs, so bring them forward explicitly.
+alter table public.profiles add column if not exists polar_event_at timestamptz;
 
 alter table public.profiles enable row level security;
 

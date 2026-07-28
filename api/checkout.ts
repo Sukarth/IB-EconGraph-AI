@@ -50,8 +50,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
     }
 
+    let polar;
     try {
-        const polar = getPolar();
+        polar = getPolar();
+    } catch (err) {
+        console.error('checkout: Polar is not configured', err);
+        return res.status(503).json({ error: 'Billing is not configured on this deployment.' });
+    }
+
+    // The profile check above is only as fresh as the last webhook we processed,
+    // and the webhook lands seconds *after* payment succeeds. In that window a
+    // user who double-clicks, or opens checkout in a second tab, passes the
+    // check and can pay twice, ending up with two parallel subscriptions.
+    // Polar knows about the first subscription as soon as it is paid, so ask it
+    // rather than trusting our own copy. Same authority argument as
+    // delete-account.
+    try {
+        const page = await polar.subscriptions.list({ externalCustomerId: user.id, active: true });
+        for await (const chunk of page) {
+            for (const sub of chunk.result.items) {
+                if (ENTITLED_POLAR_STATUSES.has(sub.status ?? '')) {
+                    return res.status(409).json({
+                        error: 'You already have an active Supporter subscription. Manage it from Settings > Manage billing.',
+                        code: 'already_subscribed',
+                    });
+                }
+            }
+        }
+    } catch (err) {
+        // Refuse rather than risk a duplicate charge: an unverifiable billing
+        // state is exactly when a second checkout is most dangerous.
+        console.error('checkout: could not list existing subscriptions', err);
+        return res.status(503).json({
+            error: 'Could not verify your billing status right now. Please try again in a moment.',
+        });
+    }
+
+    try {
         const appUrl = getAppUrl(req);
         const checkout = await polar.checkouts.create({
             products: [productId],

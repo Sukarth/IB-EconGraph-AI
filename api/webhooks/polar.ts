@@ -37,6 +37,30 @@ interface SubscriptionLike {
     recurringInterval?: string | null;
     customerId?: string;
     customer?: { id?: string; externalId?: string | null } | null;
+    /** When Polar last changed this subscription. Used to order deliveries. */
+    modifiedAt?: Date | null;
+    createdAt?: Date | null;
+}
+
+/**
+ * Ordering key for an event. Webhook deliveries are not ordered and are
+ * retried, so "the event that arrived last" is not "the event that happened
+ * last". Polar stamps every subscription change with `modifiedAt`; a freshly
+ * created subscription has none yet, so `createdAt` stands in.
+ *
+ * Returns null when neither is usable, in which case the caller falls back to
+ * applying the event unordered (better than dropping billing state entirely).
+ */
+function eventTimestamp(sub: SubscriptionLike): Date | null {
+    for (const candidate of [sub.modifiedAt, sub.createdAt]) {
+        if (candidate instanceof Date && !Number.isNaN(candidate.getTime())) return candidate;
+        // The SDK parses these into Dates, but a hand-built payload may carry strings.
+        if (typeof candidate === 'string') {
+            const parsed = new Date(candidate);
+            if (!Number.isNaN(parsed.getTime())) return parsed;
+        }
+    }
+    return null;
 }
 
 async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
@@ -55,7 +79,7 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     // (e.g. after cancel + resubscribe, a delayed event for the old sub).
     const { data: current, error: currentError } = await admin
         .from('profiles')
-        .select('polar_subscription_id, pro_until')
+        .select('polar_subscription_id, pro_until, polar_event_at')
         .eq('id', userId)
         .maybeSingle();
     if (currentError) {
@@ -68,6 +92,22 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     const differentSub = !!onFile && onFile !== sub.id;
     const DAY_MS = 24 * 60 * 60 * 1000;
     const currentEnd = current?.pro_until ? Date.parse(current.pro_until) : 0;
+
+    // Deliveries are neither ordered nor deduplicated. Checking only that the
+    // subscription id matches (as this used to) left the worst case open: a
+    // delayed `subscription.active` for the SAME subscription, arriving after a
+    // cancellation, passed every guard and the `Math.max` below then restored
+    // the future pro_until. Comparing the event's own timestamp against the
+    // last one applied rejects it.
+    const eventAt = eventTimestamp(sub);
+    const appliedAt = current?.polar_event_at ? Date.parse(current.polar_event_at) : null;
+    if (eventAt && appliedAt !== null && eventAt.getTime() < appliedAt) {
+        console.log(
+            `polar webhook: ignoring ${sub.status} for ${sub.id}; event is older ` +
+            `(${eventAt.toISOString()}) than the last applied (${current!.polar_event_at})`,
+        );
+        return;
+    }
 
     let proUntil: string;
     if (entitled) {
@@ -103,7 +143,14 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
         proUntil = new Date().toISOString();
     }
 
-    const { error } = await admin
+    // The read above and this write are separate round trips, so two concurrent
+    // deliveries for the same user can each compute from the same snapshot and
+    // the slower write wins regardless of which event is newer. Repeating the
+    // ordering test as a predicate on the UPDATE makes the decision atomic: a
+    // handler whose event has been overtaken matches no row and writes nothing.
+    // `lte` rather than `lt` so a retry of the very same event is idempotent.
+    const eventAtIso = eventAt ? eventAt.toISOString() : null;
+    let query = admin
         .from('profiles')
         .update({
             pro_status: sub.status,
@@ -111,13 +158,25 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
             plan_interval: sub.recurringInterval ?? null,
             polar_customer_id: sub.customer?.id ?? sub.customerId ?? null,
             polar_subscription_id: sub.id,
+            polar_event_at: eventAtIso,
             updated_at: new Date().toISOString(),
         })
         .eq('id', userId);
+    if (eventAtIso) {
+        query = query.or(`polar_event_at.is.null,polar_event_at.lte.${eventAtIso}`);
+    }
+    // `select` so a zero-row result is distinguishable from a successful write.
+    const { data: updated, error } = await query.select('id');
 
     if (error) {
         // Throw so Polar retries the delivery.
         throw new Error(`Failed to update profile ${userId}: ${error.message}`);
+    }
+    if (!updated || updated.length === 0) {
+        // Either the profile row is gone (deleted account) or a newer event won
+        // the race. Neither is retryable, so ack rather than throwing.
+        console.log(`polar webhook: no row updated for ${userId} (${sub.id}); a newer event or a deleted account`);
+        return;
     }
     console.log(`polar webhook: ${userId} → status=${sub.status} pro_until=${proUntil}`);
 }
