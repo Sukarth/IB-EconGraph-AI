@@ -23,17 +23,24 @@ const VERSIONS_TO_KEEP = 30;
 // store just means one extra snapshot.
 const VERSION_HASH_KEY = 'econgraph_version_hashes_v1';
 
-function loadVersionHashes(): Record<string, string> {
+// All three of these track work owed to one specific account. Two accounts
+// sharing a browser must not share them: B's sync would find A's queued graph
+// ids missing from its own library, conclude the graphs were deleted and drop
+// them, and B's successful share refresh would clear the flag A is still
+// waiting on. Either way A's retry never happens and the work is lost.
+const perUser = (base: string, userId: string) => `${base}__u_${userId}`;
+
+function loadVersionHashes(userId: string): Record<string, string> {
     try {
-        const raw = localStorage.getItem(VERSION_HASH_KEY);
+        const raw = localStorage.getItem(perUser(VERSION_HASH_KEY, userId));
         if (raw) return JSON.parse(raw) as Record<string, string>;
     } catch { /* corrupted — start fresh */ }
     return {};
 }
 
-function saveVersionHashes(map: Record<string, string>): void {
+function saveVersionHashes(userId: string, map: Record<string, string>): void {
     try {
-        localStorage.setItem(VERSION_HASH_KEY, JSON.stringify(map));
+        localStorage.setItem(perUser(VERSION_HASH_KEY, userId), JSON.stringify(map));
     } catch { /* quota — best-effort */ }
 }
 
@@ -44,9 +51,9 @@ function saveVersionHashes(map: Record<string, string>): void {
 const PENDING_VERSIONS_KEY = 'econgraph_pending_versions_v1';
 const PENDING_SHARES_KEY = 'econgraph_pending_share_refresh_v1';
 
-function loadPendingVersionIds(): Set<string> {
+function loadPendingVersionIds(userId: string): Set<string> {
     try {
-        const raw = localStorage.getItem(PENDING_VERSIONS_KEY);
+        const raw = localStorage.getItem(perUser(PENDING_VERSIONS_KEY, userId));
         if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed)) return new Set(parsed.filter((v) => typeof v === 'string'));
@@ -55,25 +62,27 @@ function loadPendingVersionIds(): Set<string> {
     return new Set();
 }
 
-function savePendingVersionIds(ids: Set<string>): void {
+function savePendingVersionIds(userId: string, ids: Set<string>): void {
     try {
-        if (ids.size === 0) localStorage.removeItem(PENDING_VERSIONS_KEY);
-        else localStorage.setItem(PENDING_VERSIONS_KEY, JSON.stringify([...ids]));
+        const key = perUser(PENDING_VERSIONS_KEY, userId);
+        if (ids.size === 0) localStorage.removeItem(key);
+        else localStorage.setItem(key, JSON.stringify([...ids]));
     } catch { /* quota — best-effort */ }
 }
 
-function sharesRefreshPending(): boolean {
+function sharesRefreshPending(userId: string): boolean {
     try {
-        return localStorage.getItem(PENDING_SHARES_KEY) === '1';
+        return localStorage.getItem(perUser(PENDING_SHARES_KEY, userId)) === '1';
     } catch {
         return false;
     }
 }
 
-function setSharesRefreshPending(pending: boolean): void {
+function setSharesRefreshPending(userId: string, pending: boolean): void {
     try {
-        if (pending) localStorage.setItem(PENDING_SHARES_KEY, '1');
-        else localStorage.removeItem(PENDING_SHARES_KEY);
+        const key = perUser(PENDING_SHARES_KEY, userId);
+        if (pending) localStorage.setItem(key, '1');
+        else localStorage.removeItem(key);
     } catch { /* quota — best-effort */ }
 }
 
@@ -556,7 +565,7 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
     // Retries first: a graph whose snapshot insert failed on an earlier sync is
     // not necessarily pushed again (it needs no further edits), so without this
     // its revision would be lost permanently.
-    const pendingVersionIds = loadPendingVersionIds();
+    const pendingVersionIds = loadPendingVersionIds(userId);
     const versionCandidates = [...graphRows];
     const queuedIds = new Set(graphRows.map((r) => r.id));
     for (const id of pendingVersionIds) {
@@ -570,7 +579,7 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
         // Only snapshot graphs whose content actually changed since their last
         // version — skip pushes that merely bumped last_modified, so identical
         // snapshots don't pile up in the free-tier DB.
-        const hashes = loadVersionHashes();
+        const hashes = loadVersionHashes(userId);
         const changedRows = versionCandidates.filter((row) => {
             const h = versionFingerprint(row.data as Graph);
             if (hashes[row.id] === h && !pendingVersionIds.has(row.id)) return false;
@@ -599,7 +608,7 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
                 for (const row of changedRows) pendingVersionIds.add(row.id);
             } else {
                 for (const row of changedRows) pendingVersionIds.delete(row.id);
-                saveVersionHashes(hashes);
+                saveVersionHashes(userId, hashes);
                 // Independent per-graph prunes — run them concurrently instead of a
                 // serial round-trip each, which stalls the debounced sync path.
                 await Promise.all(
@@ -610,7 +619,7 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
             }
         }
     }
-    savePendingVersionIds(pendingVersionIds);
+    savePendingVersionIds(userId, pendingVersionIds);
 
     // ── Keep share links fresh, drop shares of deleted content ──
     await refreshShares(
@@ -645,7 +654,7 @@ async function refreshShares(
     // A previous run failed partway. Its shares were never refreshed and the
     // rows behind them may not change again, so this run refreshes everything
     // rather than only what it happened to touch.
-    const retryAll = sharesRefreshPending();
+    const retryAll = sharesRefreshPending(userId);
     let failed = false;
     try {
         const { data: shares, error } = await supabase
@@ -654,7 +663,7 @@ async function refreshShares(
             .eq('user_id', userId);
         if (error) throw new Error(error.message);
         if (!shares || shares.length === 0) {
-            setSharesRefreshPending(false);
+            setSharesRefreshPending(userId, false);
             return;
         }
 
@@ -706,7 +715,7 @@ async function refreshShares(
     }
     // Sticky until a run completes cleanly, so a transient failure cannot leave
     // a public link showing stale content forever.
-    setSharesRefreshPending(failed);
+    setSharesRefreshPending(userId, failed);
 }
 
 function friendlySyncError(message: string): string {

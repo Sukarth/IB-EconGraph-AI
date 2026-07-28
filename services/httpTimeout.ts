@@ -30,26 +30,37 @@ export async function fetchWithTimeout(
     timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    // Which one actually stopped the request. Reading `aborted` off the two
+    // signals afterwards cannot tell us: a caller who cancels just after the
+    // deadline fires leaves both set, and the request would be reported as
+    // their cancellation when it was really a timeout. First one wins.
+    let cause: 'timeout' | 'caller' | null = null;
+
+    const timer = setTimeout(() => {
+        cause ??= 'timeout';
+        controller.abort();
+    }, timeoutMs);
 
     // Passing `signal: controller.signal` overwrites whatever the caller put in
     // `init`, so their own cancellation would quietly stop working. Chain the
-    // two instead: either one aborts the request.
+    // two instead: either one aborts the request, and the caller's reason is
+    // carried through so they can tell why.
     const external = init.signal ?? undefined;
-    const forwardAbort = () => controller.abort();
+    const forwardAbort = () => {
+        cause ??= 'caller';
+        controller.abort(external!.reason);
+    };
     if (external) {
-        if (external.aborted) controller.abort();
+        if (external.aborted) forwardAbort();
         else external.addEventListener('abort', forwardAbort, { once: true });
     }
 
     try {
         return await fetch(input, { ...init, signal: controller.signal });
     } catch (err) {
-        // Distinguish our own deadline from a network failure or a caller's
-        // abort, so the message can say which one happened. The caller's abort
-        // is theirs to describe, so it propagates untouched.
-        if (external?.aborted) throw err;
-        if (controller.signal.aborted) throw new RequestTimeoutError();
+        // Our own deadline becomes a message the UI can render. A caller's
+        // abort is theirs to describe, so it propagates untouched.
+        if (cause === 'timeout') throw new RequestTimeoutError();
         throw err;
     } finally {
         clearTimeout(timer);

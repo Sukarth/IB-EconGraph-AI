@@ -213,12 +213,24 @@ function migrateToNamespaces(): void {
             const source = lsGet(collection, GUEST_SCOPE);
             const destination = lsGet(collection, owner);
             if (!source.ok || !destination.ok) { complete = false; continue; }
-            // Don't clobber an existing namespace if this somehow runs twice.
-            if (source.raw !== null && destination.raw === null) {
+            if (source.raw === null) continue;
+
+            if (destination.raw === null) {
                 // Only drop the source once the copy is definitely on disk.
-                if (lsSet(collection, owner, source.raw)) lsSet(collection, GUEST_SCOPE, null);
-                else complete = false;
+                if (!lsSet(collection, owner, source.raw)) { complete = false; continue; }
+            } else if (destination.raw !== source.raw) {
+                // The account already has its own copy of this collection and it
+                // is not the one we are holding. Never clobber it, and leave the
+                // guest data alone rather than guess which is wanted.
+                continue;
             }
+            // The account namespace now holds exactly this content, so the guest
+            // copy is a duplicate. Clearing it is what finishes the move: a
+            // failed clear leaves the same diagrams visible in both namespaces,
+            // so it counts as unfinished and gets retried on the next load.
+            // This is also the path a resumed run takes, where the copy landed
+            // last time but the clear did not.
+            if (!lsSet(collection, GUEST_SCOPE, null)) complete = false;
         }
         if (!complete) return;
         try { localStorage.removeItem(LEGACY_OWNER_KEY); } catch { /* ignore */ }

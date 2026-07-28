@@ -193,6 +193,9 @@ export default function App() {
   // True between signing in and deciding whether signed-out work joins this
   // account. The editor holds off creating a blank diagram until it resolves.
   const [pendingGuestAdoption, setPendingGuestAdoption] = useState(false);
+  // The handover is decided (so `pendingGuestAdoption` is already false) but the
+  // copy is still running. See the auto-open effect.
+  const [adoptingGuestWork, setAdoptingGuestWork] = useState(false);
 
   const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[], forUserId: string) => {
     // A sync that lands after the account changed is carrying the previous
@@ -388,15 +391,26 @@ export default function App() {
     // cloud), so the signed-out work stays where it is, ready for next time.
     if (decision !== 'adopt') return;
 
+    // `pendingGuestAdoption` is already false by now, so on its own it no longer
+    // holds the auto-open effect back. Without this second flag that effect sees
+    // an empty library, creates a blank diagram and syncs it up, and the adopted
+    // graphs then replace it locally while the stray row stays in the cloud.
+    setAdoptingGuestWork(true);
     let cancelled = false;
     void (async () => {
-      const adopted = await adoptScope(GUEST_SCOPE, storeScope);
-      // null means the copy failed and the work is still in the guest
-      // namespace. Leave this account empty rather than showing diagrams that
-      // were not actually saved to it.
-      if (cancelled || !adopted) return;
-      setGraphs(adopted.graphs);
-      setProjects(adopted.projects);
+      try {
+        const adopted = await adoptScope(GUEST_SCOPE, storeScope);
+        // null means the copy failed and the work is still in the guest
+        // namespace. Leave this account empty rather than showing diagrams that
+        // were not actually saved to it.
+        if (cancelled || !adopted) return;
+        setGraphs(adopted.graphs);
+        setProjects(adopted.projects);
+      } finally {
+        // Unconditional: a cancelled run that left this set would hold the
+        // editor empty for the rest of the session.
+        setAdoptingGuestWork(false);
+      }
     })();
     return () => { cancelled = true; };
   }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, firstPullFailed, graphs.length, projects.length]);
@@ -436,6 +450,10 @@ export default function App() {
       // A failed pull leaves that decision unresolved indefinitely, so don't
       // hold the editor hostage to it.
       if (pendingGuestAdoption && !firstPullFailed) return;
+      // The copy itself is a bounded local operation, so once it is actually
+      // running, always wait for it: `firstPullFailed` says nothing about
+      // whether the diagrams are about to arrive.
+      if (adoptingGuestWork) return;
       // Create new graph if none exist
       const newGraph: Graph = {
         id: generateId(),
@@ -459,7 +477,7 @@ export default function App() {
       historyRef.current = [newGraph.diagramData];
       setHistoryIndex(0);
     }
-  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption, firstPullFailed]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
+  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption, adoptingGuestWork, firstPullFailed]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
   // Only write once the namespace in memory is the one we last loaded. During an
@@ -869,10 +887,15 @@ export default function App() {
   const handleImportData = useCallback(async (data: { graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] }) => {
     // Import replaces everything, tombstone current items missing from the
     // backup so cloud sync propagates the replacement instead of undoing it.
+    // Bind the restore to the namespace it started in. Signing in or out during
+    // the cloud read below would otherwise drop this backup, and the deletions
+    // that come with it, into whichever account happens to be live by then.
+    const startedIn = loadedScopeRef.current;
+
     const importedGraphIds = new Set(data.graphs.map(g => g.id));
     const importedProjectIds = new Set(data.projects.map(p => p.id));
-    recordTombstones('graphs', graphs.filter(g => !importedGraphIds.has(g.id)).map(g => g.id));
-    recordTombstones('projects', projects.filter(p => !importedProjectIds.has(p.id)).map(p => p.id));
+    const graphTombstones = graphs.filter(g => !importedGraphIds.has(g.id)).map(g => g.id);
+    const projectTombstones = projects.filter(p => !importedProjectIds.has(p.id)).map(p => p.id);
 
     // Cloud rows that live only on another device were never in local `graphs`,
     // so the filter above can't tombstone them, without this, the next sync
@@ -883,10 +906,27 @@ export default function App() {
     // schedules a sync, and a sync that runs while these tombstones are still
     // missing merges the remote-only rows straight back in.
     const cloud = await fetchCloudIds();
-    if (cloud) {
-      recordTombstones('graphs', cloud.graphIds.filter(id => !importedGraphIds.has(id)));
-      recordTombstones('projects', cloud.projectIds.filter(id => !importedProjectIds.has(id)));
+
+    // Nothing above this point has written anything, so abandoning here leaves
+    // no trace in either account.
+    if (loadedScopeRef.current !== startedIn) {
+      setConfirmModal({
+        visible: true,
+        title: 'Restore cancelled',
+        message: 'The account changed while the backup was being restored, so nothing was imported. Please try again.',
+        confirmText: 'OK',
+        danger: false,
+        onConfirm: () => setConfirmModal(c => ({ ...c, visible: false })),
+      });
+      return;
     }
+
+    if (cloud) {
+      graphTombstones.push(...cloud.graphIds.filter(id => !importedGraphIds.has(id)));
+      projectTombstones.push(...cloud.projectIds.filter(id => !importedProjectIds.has(id)));
+    }
+    recordTombstones('graphs', graphTombstones);
+    recordTombstones('projects', projectTombstones);
 
     // Restored items must win last-write-wins against any wiped/tombstoned
     // remote rows, and must not collide with a stale tombstone of the same id.
