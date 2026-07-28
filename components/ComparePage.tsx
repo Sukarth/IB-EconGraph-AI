@@ -144,29 +144,39 @@ const ComparePage: React.FC<ComparePageProps> = ({ onOpenEditor, onOpenLanding, 
             {/* Comparison table */}
             <section className="pb-12 px-6">
                 <div className="max-w-6xl mx-auto">
-                    <div className="overflow-x-auto rounded-2xl border border-slate-200 shadow-sm">
+                    {/* The table is wider than a phone viewport, so the wrapper
+                        scrolls horizontally. tabIndex makes that scroll reachable
+                        without a pointer; the role/label give the focus stop a name. */}
+                    <div
+                        className="overflow-x-auto rounded-2xl border border-slate-200 shadow-sm"
+                        tabIndex={0}
+                        role="region"
+                        aria-label="Feature comparison"
+                    >
                         <table className="w-full text-left text-sm min-w-[760px]">
                             <thead>
                                 <tr className="bg-slate-50 border-b border-slate-200">
-                                    <th className="p-4 font-semibold text-gray-500 w-[22%]"></th>
-                                    <th className="p-4 font-bold text-gray-900 w-[26%] bg-blue-50/50">
+                                    <th scope="col" className="p-4 font-semibold text-gray-500 w-[22%]">
+                                        <span className="sr-only">Feature</span>
+                                    </th>
+                                    <th scope="col" className="p-4 font-bold text-gray-900 w-[26%] bg-blue-50/50">
                                         IB EconGraph AI
                                         <div className="text-xs font-medium text-blue-600 mt-0.5">this tool</div>
                                     </th>
-                                    <th className="p-4 font-semibold text-gray-700 w-[26%]">
+                                    <th scope="col" className="p-4 font-semibold text-gray-700 w-[26%]">
                                         EconGraph Pro
-                                        <div className="text-xs font-normal text-gray-400 mt-0.5">Diploma Collective</div>
+                                        <div className="text-xs font-normal text-gray-500 mt-0.5">Diploma Collective</div>
                                     </th>
-                                    <th className="p-4 font-semibold text-gray-700 w-[26%]">
+                                    <th scope="col" className="p-4 font-semibold text-gray-700 w-[26%]">
                                         EconDiagrams
-                                        <div className="text-xs font-normal text-gray-400 mt-0.5">EconDaddy · beta</div>
+                                        <div className="text-xs font-normal text-gray-500 mt-0.5">EconDaddy · beta</div>
                                     </th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {ROWS.map((row, i) => (
                                     <tr key={i} className="border-b border-slate-100 last:border-0 align-top">
-                                        <td className="p-4 font-medium text-gray-700">{row.label}</td>
+                                        <th scope="row" className="p-4 font-medium text-gray-700 text-left">{row.label}</th>
                                         <td className="p-4 bg-blue-50/30">
                                             <div className="flex items-start gap-2 text-gray-700">
                                                 <CellIcon kind={row.us.kind} />

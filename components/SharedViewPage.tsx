@@ -165,7 +165,7 @@ const SharedViewPage: React.FC<SharedViewPageProps> = ({ slug, onGoHome }) => {
                 )}
             </main>
 
-            <footer className="py-4 text-center text-xs text-gray-400 border-t border-gray-100 bg-white">
+            <footer className="py-4 text-center text-xs text-gray-500 border-t border-gray-100 bg-white">
                 Made with{' '}
                 <button onClick={onGoHome} className="text-blue-600 hover:underline font-medium">
                     IB EconGraph AI

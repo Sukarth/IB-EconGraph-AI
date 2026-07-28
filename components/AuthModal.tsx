@@ -130,6 +130,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             placeholder="you@school.org"
+                            aria-label="Email address"
                             className="w-full pl-9 pr-3 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm bg-gray-50"
                         />
                     </div>
@@ -171,6 +172,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
                             placeholder="you@school.org"
+                            aria-label="Email address"
                             className="w-full pl-9 pr-3 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm bg-gray-50"
                         />
                     </div>
@@ -183,6 +185,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             placeholder={isSignup ? `Password (min ${MIN_PASSWORD} characters)` : 'Password'}
+                            aria-label="Password"
                             className="w-full pl-9 pr-10 py-3 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none text-sm bg-gray-50"
                         />
                         <button

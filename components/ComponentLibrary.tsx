@@ -252,10 +252,22 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
                                 {saveError && <p className="text-xs text-red-600 px-1">{saveError}</p>}
 
                                 {filteredCustom.map((t) => (
+                                    // Not a <button>: it contains the delete button, and
+                                    // nesting interactive elements is invalid. role +
+                                    // tabIndex + a key handler give it the same behaviour.
                                     <div
                                         key={t.id}
-                                        className="group flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 border border-transparent hover:border-gray-200 transition-all cursor-pointer"
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Add template ${t.name}`}
+                                        className="group flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 border border-transparent hover:border-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 transition-all cursor-pointer"
                                         onClick={() => addCustomTemplate(t)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault(); // Space would scroll the panel
+                                                addCustomTemplate(t);
+                                            }
+                                        }}
                                     >
                                         <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-100 text-indigo-600">
                                             <Star className="w-4 h-4" />
@@ -267,10 +279,14 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
                                             </p>
                                         </div>
                                         <button
+                                            type="button"
+                                            aria-label={`Delete template ${t.name}`}
                                             onClick={(e) => { e.stopPropagation(); setPendingDelete(t); }}
                                             onMouseEnter={(e) => showTooltip(e.currentTarget, 'Delete template')}
                                             onMouseLeave={hideTooltip}
-                                            className="p-1.5 rounded-md text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600"
+                                            // focus-visible:opacity-100 so it doesn't stay
+                                            // invisible when reached by keyboard.
+                                            className="p-1.5 rounded-md text-gray-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600"
                                         >
                                             <Trash2 className="w-3 h-3" />
                                         </button>

@@ -34,9 +34,11 @@ const LegalLayout: React.FC<{ title: string; children: React.ReactNode }> = ({ t
         </nav>
         <main className="max-w-3xl mx-auto px-6 py-12">
             <h1 className="text-3xl md:text-4xl font-bold text-gray-900 tracking-tight mb-2">{title}</h1>
-            <p className="text-sm text-gray-400 mb-10">Last updated: {LAST_UPDATED}</p>
+            {/* gray-500 rather than gray-400: gray-400 on white is 2.5:1, under
+                WCAG AA's 4.5:1 minimum for normal-size text. */}
+            <p className="text-sm text-gray-500 mb-10">Last updated: {LAST_UPDATED}</p>
             <div className="space-y-8 leading-relaxed">{children}</div>
-            <footer className="mt-16 pt-8 border-t border-slate-100 text-sm text-gray-400 flex flex-wrap gap-x-6 gap-y-2">
+            <footer className="mt-16 pt-8 border-t border-slate-100 text-sm text-gray-500 flex flex-wrap gap-x-6 gap-y-2">
                 <a href="/" className="hover:text-gray-700">Home</a>
                 <a href="/privacy" className="hover:text-gray-700">Privacy Policy</a>
                 <a href="/terms" className="hover:text-gray-700">Terms of Service</a>
