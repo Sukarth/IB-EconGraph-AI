@@ -347,15 +347,16 @@ export default function App() {
       // the canvas.
       historyIndexRef.current = 0;
       setHistoryIndex(0);
-      // Only a namespace we actually read counts as loaded. The save effects
-      // below key off `loadedScope`, so leaving it unset after a failed read is
-      // what stops an empty library being written over the stored one.
-      if (stored.ok) {
-        setLoadedScope(storeScope);
-        setStorageUnreadable(false);
-      } else {
-        console.error(`Could not read local storage for ${storeScope}; not saving over it.`);
-        setStorageUnreadable(true);
+      // `loadedScope` records which namespace this effect has settled, so it is
+      // set either way: leaving it behind on a failure would re-run the effect
+      // forever, and leaving it pointing at the *previous* account would let
+      // that account's library be overwritten with this one's empty arrays the
+      // moment the user switched back. Whether saving is allowed is a separate
+      // question, and `storageUnreadable` is what answers it.
+      setLoadedScope(storeScope);
+      setStorageUnreadable(!stored.ok);
+      if (!stored.ok) {
+        console.error(`Could not read local storage for ${storeScope}; saving is off so it is not overwritten.`);
       }
       setHasInitialized(true);
     })();
@@ -465,14 +466,14 @@ export default function App() {
   // account switch those differ for a render, and writing then would save the
   // outgoing account's diagrams over the incoming account's.
   useEffect(() => {
-    if (!hasInitialized || loadedScope === null || loadedScope !== storeScope) return;
+    if (!hasInitialized || storageUnreadable || loadedScope === null || loadedScope !== storeScope) return;
     void writeGraphs(loadedScope, graphs);
-  }, [graphs, hasInitialized, loadedScope, storeScope]);
+  }, [graphs, hasInitialized, storageUnreadable, loadedScope, storeScope]);
 
   useEffect(() => {
-    if (!hasInitialized || loadedScope === null || loadedScope !== storeScope) return;
+    if (!hasInitialized || storageUnreadable || loadedScope === null || loadedScope !== storeScope) return;
     void writeProjects(loadedScope, projects);
-  }, [projects, hasInitialized, loadedScope, storeScope]);
+  }, [projects, hasInitialized, storageUnreadable, loadedScope, storeScope]);
 
   useEffect(() => {
     if (!hasInitialized) return;

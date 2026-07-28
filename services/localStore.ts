@@ -67,11 +67,17 @@ function dbKey(collection: Collection, scope: StoreScope): string {
 // localStorage backend (also the source for the one-time move into IndexedDB)
 // ---------------------------------------------------------------------------
 
-function lsGet(collection: Collection, scope: StoreScope): string | null {
+/**
+ * `ok` is false only when localStorage itself refused the read (disabled, or a
+ * SecurityError in a partitioned context). A missing key is a successful read of
+ * nothing, and the two must not be confused: one means the namespace is empty,
+ * the other means we have no idea what is in it.
+ */
+function lsGet(collection: Collection, scope: StoreScope): { ok: boolean; raw: string | null } {
     try {
-        return localStorage.getItem(localKey(collection, scope));
+        return { ok: true, raw: localStorage.getItem(localKey(collection, scope)) };
     } catch {
-        return null;
+        return { ok: false, raw: null };
     }
 }
 
@@ -197,14 +203,24 @@ function migrateToNamespaces(): void {
     } catch { /* ignore */ }
 
     if (owner && owner !== GUEST_SCOPE) {
+        // A collection left behind still belongs to `owner`, but it is sitting
+        // in the guest keys. Stamping the version would end the retries and
+        // leave it looking like work done signed out, so it would vanish from
+        // the account it actually belongs to. Keep the owner key and the
+        // version as they are until the whole move lands.
+        let complete = true;
         for (const collection of COLLECTIONS) {
-            const raw = lsGet(collection, GUEST_SCOPE);
+            const source = lsGet(collection, GUEST_SCOPE);
+            const destination = lsGet(collection, owner);
+            if (!source.ok || !destination.ok) { complete = false; continue; }
             // Don't clobber an existing namespace if this somehow runs twice.
-            if (raw !== null && lsGet(collection, owner) === null) {
+            if (source.raw !== null && destination.raw === null) {
                 // Only drop the source once the copy is definitely on disk.
-                if (lsSet(collection, owner, raw)) lsSet(collection, GUEST_SCOPE, null);
+                if (lsSet(collection, owner, source.raw)) lsSet(collection, GUEST_SCOPE, null);
+                else complete = false;
             }
         }
+        if (!complete) return;
         try { localStorage.removeItem(LEGACY_OWNER_KEY); } catch { /* ignore */ }
     }
     writeVersion(VERSION_NAMESPACED);
@@ -313,7 +329,8 @@ async function readCollection<T>(collection: Collection, scope: StoreScope): Pro
         const result = await idbGet<T[]>(db, dbKey(collection, scope));
         return { ok: result.ok, items: Array.isArray(result.value) ? result.value : [] };
     }
-    return { ok: true, items: parseArray<T>(lsGet(collection, scope)) };
+    const stored = lsGet(collection, scope);
+    return { ok: stored.ok, items: parseArray<T>(stored.raw) };
 }
 
 // Serialise writes per key: two rapid saves resolving out of order would
