@@ -6,7 +6,7 @@
 // them via cleanUrls (dist/diagrams/foo.html → /diagrams/foo) ahead of the
 // SPA rewrite, which only applies when no file matches.
 
-import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_PAGES, SITE_URL } from './seo-content.mjs';
@@ -377,11 +377,81 @@ function renderHubPage() {
     });
 }
 
+// ── SPA route shells ─────────────────────────────────────────────────────────
+// /pricing, /compare, /privacy and /terms are React views, so they would be
+// served index.html, whose canonical is hardcoded to "/". App.tsx rewrites that
+// after hydration, but the *served* document still tells a crawler these are
+// duplicates of the homepage, which is precisely what the sitemap below is
+// asking it to index. Emitting a per-route copy of the built index.html,
+// differing only in the metadata, makes the served HTML self-canonicalizing
+// while still booting the same SPA bundle (the SPA reads the path and renders
+// the right view, exactly as it does today).
+//
+// Keep these titles in sync with the `meta` map in App.tsx, which sets the same
+// values at runtime.
+const SPA_ROUTES = [
+    {
+        file: 'pricing.html',
+        path: '/pricing',
+        title: 'Pricing · Free Forever · IB EconGraph AI',
+        description:
+            'IB EconGraph AI is free forever: unlimited diagrams, all templates, watermark-free exports. The optional Supporter plan adds cloud sync, version history, share links and hosted AI.',
+    },
+    {
+        file: 'compare.html',
+        path: '/compare',
+        title: 'How IB EconGraph AI Compares: IB Economics Diagram Tools',
+        description:
+            'A side-by-side comparison of IB Economics diagram tools: features, pricing, exports and openness, so you can pick the one that fits how you study.',
+    },
+    {
+        file: 'privacy.html',
+        path: '/privacy',
+        title: 'Privacy Policy · IB EconGraph AI',
+        description:
+            'How IB EconGraph AI handles your data: local-first storage, what an optional account stores, and what the hosted AI receives.',
+    },
+    {
+        file: 'terms.html',
+        path: '/terms',
+        title: 'Terms of Service · IB EconGraph AI',
+        description:
+            'Terms of service for IB EconGraph AI, the free and open-source IB Economics diagram editor, including the optional Supporter plan.',
+    },
+];
+
+function renderSpaRouteShell(indexHtml, route) {
+    const url = `${SITE_URL}${route.path}`;
+    // Each substitution is asserted: a Vite or index.html change that stopped
+    // one from matching would otherwise ship a page canonicalized to "/", the
+    // exact bug this exists to prevent, with no sign anything went wrong.
+    const substitutions = [
+        [/<title>[\s\S]*?<\/title>/, `<title>${esc(route.title)}</title>`],
+        [/<link rel="canonical"[^>]*>/, `<link rel="canonical" href="${url}" />`],
+        [/<meta name="description"[\s\S]*?\/>/, `<meta name="description" content="${esc(route.description)}" />`],
+        [/<meta property="og:title"[\s\S]*?\/>/, `<meta property="og:title" content="${esc(route.title)}" />`],
+        [/<meta property="og:description"[\s\S]*?\/>/, `<meta property="og:description" content="${esc(route.description)}" />`],
+        [/<meta property="og:url"[\s\S]*?\/>/, `<meta property="og:url" content="${url}" />`],
+        [/<meta name="twitter:title"[\s\S]*?\/>/, `<meta name="twitter:title" content="${esc(route.title)}" />`],
+        [/<meta name="twitter:description"[\s\S]*?\/>/, `<meta name="twitter:description" content="${esc(route.description)}" />`],
+    ];
+    let html = indexHtml;
+    for (const [pattern, replacement] of substitutions) {
+        if (!pattern.test(html)) {
+            console.error(`generate-seo-pages: ${route.file} — no match for ${pattern} in dist/index.html.`);
+            process.exit(1);
+        }
+        html = html.replace(pattern, replacement);
+    }
+    return html;
+}
+
 function renderSitemap() {
     // Only list URLs whose served HTML self-canonicalizes. /home, /editor and
     // /settings are app UI that serve index.html (canonical → "/"), so listing
-    // them would submit homepage duplicates. /pricing and /compare are included
-    // because the SPA sets a matching per-route canonical (see App.tsx).
+    // them would submit homepage duplicates. The four content routes below get
+    // a pre-rendered shell each (see SPA_ROUTES), so their served HTML points
+    // at itself rather than the homepage.
     const urls = [
         { loc: '/', priority: '1.0', changefreq: 'weekly' },
         { loc: '/pricing', priority: '0.9', changefreq: 'monthly' },
@@ -415,6 +485,14 @@ for (const page of DIAGRAM_PAGES) {
     writeFileSync(join(DIST, 'diagrams', `${page.slug}.html`), renderDiagramPage(page));
 }
 writeFileSync(join(DIST, 'diagrams.html'), renderHubPage());
+
+const indexHtml = readFileSync(join(DIST, 'index.html'), 'utf8');
+for (const route of SPA_ROUTES) {
+    writeFileSync(join(DIST, route.file), renderSpaRouteShell(indexHtml, route));
+}
+
 writeFileSync(join(DIST, 'sitemap.xml'), renderSitemap());
 
-console.log(`Generated ${DIAGRAM_PAGES.length} diagram pages + hub + sitemap.xml into dist/`);
+console.log(
+    `Generated ${DIAGRAM_PAGES.length} diagram pages + hub + ${SPA_ROUTES.length} route shells + sitemap.xml into dist/`,
+);

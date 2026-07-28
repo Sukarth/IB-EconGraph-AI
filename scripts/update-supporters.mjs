@@ -21,20 +21,32 @@ const END = '<!-- SUPPORTERS:END -->';
 
 const supabase = createClient(url, key, { auth: { persistSession: false } });
 
-const { data, error } = await supabase
-    .from('profiles')
-    .select('supporter_name, pro_until, created_at')
-    .eq('show_in_supporters', true)
-    .not('supporter_name', 'is', null)
-    .gt('pro_until', new Date().toISOString())
-    .order('created_at', { ascending: true });
+// PostgREST caps a response at `db-max-rows` (1000 by default), so a single
+// query silently drops everyone past the cap: the newest supporters would just
+// stop appearing in the README once the list got long enough. Page until a
+// short page comes back.
+const PAGE_SIZE = 1000;
+const now = new Date().toISOString();
+const data = [];
+for (let from = 0; ; from += PAGE_SIZE) {
+    const { data: page, error } = await supabase
+        .from('profiles')
+        .select('supporter_name, pro_until, created_at')
+        .eq('show_in_supporters', true)
+        .not('supporter_name', 'is', null)
+        .gt('pro_until', now)
+        .order('created_at', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
 
-if (error) {
-    console.error('Query failed:', error.message);
-    process.exit(1);
+    if (error) {
+        console.error('Query failed:', error.message);
+        process.exit(1);
+    }
+    data.push(...(page ?? []));
+    if (!page || page.length < PAGE_SIZE) break;
 }
 
-const names = (data ?? [])
+const names = data
     .map((row) => row.supporter_name?.trim())
     .filter((name) => name && name.length <= 50)
     // Markdown-escape to keep the README safe from user-controlled input.

@@ -1,11 +1,12 @@
 import { getAccessToken } from './supabaseClient';
+import { fetchWithTimeout, RequestTimeoutError } from './httpTimeout';
 
 async function callBillingEndpoint(path: string, body?: unknown): Promise<{ url?: string; error?: string }> {
     const token = await getAccessToken();
     if (!token) return { error: 'Please sign in first.' };
 
     try {
-        const res = await fetch(path, {
+        const res = await fetchWithTimeout(path, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -18,7 +19,8 @@ async function callBillingEndpoint(path: string, body?: unknown): Promise<{ url?
             return { error: data?.error || 'Something went wrong. Please try again.' };
         }
         return { url: data.url };
-    } catch {
+    } catch (err) {
+        if (err instanceof RequestTimeoutError) return { error: err.message };
         return { error: 'Could not reach the server. Check your connection and try again.' };
     }
 }
@@ -41,7 +43,7 @@ export async function deleteAccount(): Promise<{ error?: string }> {
     const token = await getAccessToken();
     if (!token) return { error: 'Please sign in first.' };
     try {
-        const res = await fetch('/api/delete-account', {
+        const res = await fetchWithTimeout('/api/delete-account', {
             method: 'POST',
             headers: { Authorization: `Bearer ${token}` },
         });
@@ -50,7 +52,11 @@ export async function deleteAccount(): Promise<{ error?: string }> {
             return { error: data?.error || 'Could not delete your account. Please try again.' };
         }
         return {};
-    } catch {
+    } catch (err) {
+        if (err instanceof RequestTimeoutError) {
+            // Deletion may still be running server-side, so don't imply it failed.
+            return { error: 'The server took too long to respond. Reload and check whether your account was deleted before trying again.' };
+        }
         return { error: 'Could not reach the server. Check your connection and try again.' };
     }
 }

@@ -162,11 +162,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (error) return { error: error.message };
         // Session present → email confirmation is disabled, user is signed in.
         if (data.session) return {};
-        // Supabase returns a user with an empty `identities` array when the
-        // email is already registered (it avoids leaking that fact via an error).
-        if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-            return { error: 'An account with this email already exists. Try signing in instead.' };
-        }
+        // Supabase deliberately does NOT say whether the address is already
+        // registered: it returns a user with an empty `identities` array instead
+        // of an error, precisely so the endpoint can't be used to enumerate
+        // accounts. Reporting "an account already exists" here would undo that,
+        // so both cases get the identical confirmation screen. Someone who does
+        // own the address learns the truth from the mail they receive; someone
+        // probing addresses learns nothing.
         return { needsConfirmation: true };
     }, []);
 

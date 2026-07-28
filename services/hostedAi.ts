@@ -1,5 +1,7 @@
 import { DiagramData } from '../types';
 import { getAccessToken } from './supabaseClient';
+import { diagramShapeError } from './diagramPrompt';
+import { fetchWithTimeout, GENERATE_TIMEOUT_MS, RequestTimeoutError } from './httpTimeout';
 
 export interface HostedUsage {
     used: number;
@@ -20,15 +22,16 @@ export async function generateDiagramDataHosted(prompt: string, history: string[
 
     let res: Response;
     try {
-        res = await fetch('/api/generate', {
+        res = await fetchWithTimeout('/api/generate', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 Authorization: `Bearer ${token}`,
             },
             body: JSON.stringify({ prompt, history }),
-        });
-    } catch {
+        }, GENERATE_TIMEOUT_MS);
+    } catch (err) {
+        if (err instanceof RequestTimeoutError) throw err;
         throw new Error('Could not reach the server. Check your connection and try again.');
     }
 
@@ -36,10 +39,16 @@ export async function generateDiagramDataHosted(prompt: string, history: string[
         | { diagram?: DiagramData; error?: string }
         | null;
 
-    // Guard the shape too: an empty/degenerate diagram ({} with no axes) would
-    // crash the renderer, so treat it as a failure rather than pass it through.
-    if (!res.ok || !body?.diagram || !body.diagram.xAxis || !body.diagram.yAxis) {
+    if (!res.ok || !body?.diagram) {
         throw new Error(body?.error || 'Hosted AI generation failed. Please try again.');
+    }
+    // Guard the shape too. The server checks it as well, but this is the last
+    // point before the renderer, which reads curve points and axis bounds
+    // without guarding and turns anything malformed into NaN geometry.
+    const shapeError = diagramShapeError(body.diagram);
+    if (shapeError) {
+        console.error(`hosted AI: unusable diagram (${shapeError})`);
+        throw new Error('The AI returned an unexpected result. Please try again.');
     }
     return body.diagram;
 }
@@ -51,7 +60,7 @@ export async function fetchHostedUsage(): Promise<HostedUsage | null> {
         // show", not reject and leave callers with an unhandled rejection.
         const token = await getAccessToken();
         if (!token) return null;
-        const res = await fetch('/api/usage', {
+        const res = await fetchWithTimeout('/api/usage', {
             headers: { Authorization: `Bearer ${token}` },
         });
         if (!res.ok) return null;

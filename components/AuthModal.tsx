@@ -107,8 +107,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     </div>
                     <h4 className="font-semibold text-gray-900 mb-1">Check your inbox</h4>
                     <p className="text-sm text-gray-500">
+                        {/* Worded to be true whether or not the address was already
+                            registered: signup deliberately does not reveal which,
+                            so this screen must not either. */}
                         {isConfirm
-                            ? <>We sent a confirmation link to <span className="font-medium text-gray-700">{email}</span>. Open it to verify your account, then sign in.</>
+                            ? <>We sent an email to <span className="font-medium text-gray-700">{email}</span>. Open the link in it to verify your account, then sign in. If you already have an account with this address, sign in instead.</>
                             : <>We sent a password-reset link to <span className="font-medium text-gray-700">{email}</span>. Open it to choose a new password.</>}
                     </p>
                     <button

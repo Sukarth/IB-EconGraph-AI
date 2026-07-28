@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks';
 import { getSupabaseAdmin } from '../_lib/supabaseAdmin';
+import { ENTITLED_POLAR_STATUSES } from '../../services/entitlement';
 
 // Signature verification requires the raw request body.
 export const config = {
@@ -19,7 +20,6 @@ export const config = {
  */
 const ACTIVE_MARGIN_DAYS = 1;
 
-const ENTITLED_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
 function readRawBody(req: VercelRequest): Promise<Buffer> {
     return new Promise((resolve, reject) => {
@@ -48,7 +48,7 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     }
 
     const admin = getSupabaseAdmin();
-    const entitled = ENTITLED_STATUSES.has(sub.status);
+    const entitled = ENTITLED_POLAR_STATUSES.has(sub.status);
 
     // Read what's currently on file so out-of-order or superseded events for a
     // DIFFERENT subscription can't clobber the one the user is actually on

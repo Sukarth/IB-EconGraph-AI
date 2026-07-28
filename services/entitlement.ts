@@ -11,3 +11,19 @@ export function isProUntilActive(proUntil: string | null | undefined): boolean {
     if (!proUntil) return false;
     return Date.parse(proUntil) > Date.now();
 }
+
+/**
+ * Polar subscription statuses that count as a live subscription: the user is
+ * either paying, in a trial, or behind on payment but not yet cancelled. Used
+ * to decide whether to offer a second checkout, whether an account deletion
+ * must revoke first, and whether a webhook grants entitlement.
+ *
+ * Shared so those three answers cannot drift apart. `past_due` is included on
+ * purpose: Polar is still retrying the charge, and dropping access mid-retry
+ * would punish a user whose card simply needs updating.
+ */
+export const ENTITLED_POLAR_STATUSES: ReadonlySet<string> = new Set([
+    'active',
+    'trialing',
+    'past_due',
+]);

@@ -1,8 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSupabaseAdmin, getUserFromRequest, getProfile } from './_lib/supabaseAdmin';
 import { getPolar } from './_lib/polar';
-
-const ACTIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+import { ENTITLED_POLAR_STATUSES } from '../services/entitlement';
 
 /**
  * Permanently deletes the signed-in user's account and all cloud data.
@@ -56,7 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const ids = new Set<string>();
         for await (const chunk of page) {
             for (const sub of chunk.result.items) {
-                if (ACTIVE_STATUSES.has(sub.status ?? '')) ids.add(sub.id);
+                if (ENTITLED_POLAR_STATUSES.has(sub.status ?? '')) ids.add(sub.id);
             }
         }
         // Belt and braces: cancel anything our own row knows about too, in case
@@ -83,7 +82,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let stillActive = true;
             try {
                 const sub = await getPolar().subscriptions.get({ id: subId });
-                stillActive = ACTIVE_STATUSES.has(sub.status ?? '');
+                stillActive = ENTITLED_POLAR_STATUSES.has(sub.status ?? '');
             } catch (lookupErr) {
                 // Only a definite "not found" proves the subscription is gone.
                 // Treating any failure as gone would delete the account during a

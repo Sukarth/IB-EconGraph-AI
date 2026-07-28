@@ -12,6 +12,7 @@ import {
     DIAGRAM_SYSTEM_INSTRUCTION,
     GEMINI_DIAGRAM_SCHEMA,
     buildHistoryContext,
+    diagramShapeError,
 } from '../services/diagramPrompt';
 
 const MAX_PROMPT_CHARS = 4000;
@@ -236,11 +237,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
         const diagram = JSON.parse(responseText);
         // An empty/whitespace model response becomes '{}' (line above), which
-        // parses to {}. A diagram without axes would crash the renderer, so
-        // reject anything missing the required shape. Not refunded (a produced
-        // response counts as used), same rationale as the parse-failure path.
-        if (!diagram || typeof diagram !== 'object' || !diagram.xAxis || !diagram.yAxis) {
-            console.error('generate: model returned an empty/invalid diagram');
+        // parses to {}. Anything the renderer cannot draw is rejected here: the
+        // response schema makes a malformed object unlikely, not impossible, and
+        // a partial one produces NaN geometry rather than a clear failure. Not
+        // refunded (a produced response counts as used), same rationale as the
+        // parse-failure path.
+        const shapeError = diagramShapeError(diagram);
+        if (shapeError) {
+            console.error(`generate: model returned an unusable diagram (${shapeError})`);
             return res.status(502).json({ error: 'The AI returned an empty result. Please try again.' });
         }
         return res.status(200).json({

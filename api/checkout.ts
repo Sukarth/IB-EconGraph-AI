@@ -1,9 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getUserFromRequest, getProfile, isProfilePro } from './_lib/supabaseAdmin';
 import { getPolar, getAppUrl } from './_lib/polar';
-
 // Subscription is live (or in dunning), a new checkout would double-charge.
-const ACTIVE_STATUSES = new Set(['active', 'trialing', 'past_due']);
+import { ENTITLED_POLAR_STATUSES } from '../services/entitlement';
 
 /**
  * Creates a Polar checkout session for the Supporter plan and returns its URL.
@@ -44,7 +43,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.error('checkout: profile lookup failed', err);
         return res.status(503).json({ error: 'Could not verify your account right now. Please try again in a moment.' });
     }
-    if (profile?.polar_subscription_id && isProfilePro(profile) && ACTIVE_STATUSES.has(profile.pro_status)) {
+    if (profile?.polar_subscription_id && isProfilePro(profile) && ENTITLED_POLAR_STATUSES.has(profile.pro_status)) {
         return res.status(409).json({
             error: 'You already have an active Supporter subscription. Manage it from Settings > Manage billing.',
             code: 'already_subscribed',
