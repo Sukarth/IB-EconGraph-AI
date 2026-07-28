@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own local diagrams, alongside a shared one for work done signed out.
   Switching accounts on a shared computer no longer erases anyone's work.
   Signed-out work is handed to the account you sign into only when that account
-  has no diagrams of its own, so two people's diagrams are never merged
+  has no diagrams of its own, so two people's diagrams are never merged.
+  Diagrams now live in IndexedDB (gigabytes) rather than localStorage (~5MB
+  shared with the auth token), migrated automatically on first load
 - Supporter recognition: opt-in name listing in the README
 - Backend setup guide (`docs/BACKEND_SETUP.md`): all cloud features degrade
   gracefully when unconfigured, so forks stay zero-config

@@ -7,7 +7,8 @@ import { useCloudSync } from './services/useCloudSync';
 import { recordTombstones, clearTombstones, fetchCloudIds } from './services/sync';
 import {
   GUEST_SCOPE,
-  migrateLegacyStore,
+  initLocalStore,
+  requestPersistentStorage,
   readScope,
   writeGraphs,
   writeProjects,
@@ -245,7 +246,11 @@ export default function App() {
   // is signed in, which isn't known until the session has been restored. See
   // the scope effect below.
   useEffect(() => {
-    migrateLegacyStore();
+    // Open the diagram store (and migrate into it) early. Reads wait on this
+    // internally, so this is just a head start, not a prerequisite.
+    void initLocalStore();
+    // Ask the browser not to evict saved diagrams when disk runs low.
+    void requestPersistentStorage();
     try {
       const savedSettings = localStorage.getItem(STORAGE_KEYS.settings);
       const savedSpecial = localStorage.getItem(STORAGE_KEYS.specialColors);
@@ -278,29 +283,37 @@ export default function App() {
   // accounts swaps which namespace is live, and never deletes the other one.
   useEffect(() => {
     if (storeScope === null || storeScope === loadedScope) return;
-    const stored = readScope(storeScope);
-    setGraphs(stored.graphs);
-    setProjects(stored.projects);
-    // Signing in with nothing of your own, over work done signed out, is the
-    // one case where the two might be joined. Flag it here so the editor waits
-    // for that decision instead of creating a blank diagram in the meantime.
-    setPendingGuestAdoption(
-      storeScope !== GUEST_SCOPE
-      && stored.graphs.length === 0
-      && stored.projects.length === 0
-      && scopeHasContent(GUEST_SCOPE)
-    );
-    // Close whatever was open and blank the canvas: it belongs to the namespace
-    // we're leaving. The auto-open effect below picks this account's most
-    // recent diagram once its data is in place.
-    setActiveGraphId(null);
-    const blank = { ...EMPTY_DIAGRAM };
-    setCurrentDiagram(blank);
-    setHistory([blank]);
-    historyRef.current = [blank];
-    setHistoryIndex(0);
-    setLoadedScope(storeScope);
-    setHasInitialized(true);
+    let cancelled = false;
+    void (async () => {
+      const stored = await readScope(storeScope);
+      // Signing in with nothing of your own, over work done signed out, is the
+      // one case where the two might be joined. Resolve it here so the editor
+      // waits for that decision instead of creating a blank diagram meanwhile.
+      const guestPending =
+        storeScope !== GUEST_SCOPE
+        && stored.graphs.length === 0
+        && stored.projects.length === 0
+        && await scopeHasContent(GUEST_SCOPE);
+      // The account may have changed again while this was loading; whichever
+      // effect run matches the live namespace is the one allowed to apply.
+      if (cancelled) return;
+
+      setGraphs(stored.graphs);
+      setProjects(stored.projects);
+      setPendingGuestAdoption(guestPending);
+      // Close whatever was open and blank the canvas: it belongs to the
+      // namespace we're leaving. The auto-open effect below picks this
+      // account's most recent diagram once its data is in place.
+      setActiveGraphId(null);
+      const blank = { ...EMPTY_DIAGRAM };
+      setCurrentDiagram(blank);
+      setHistory([blank]);
+      historyRef.current = [blank];
+      setHistoryIndex(0);
+      setLoadedScope(storeScope);
+      setHasInitialized(true);
+    })();
+    return () => { cancelled = true; };
   }, [storeScope, loadedScope]);
 
   // --- Hand guest work to the account that signs in ---
@@ -320,14 +333,21 @@ export default function App() {
     });
     if (decision === 'wait') return;
 
-    if (decision === 'adopt') {
-      const adopted = adoptScope(GUEST_SCOPE, storeScope);
-      setGraphs(adopted.graphs);
-      setProjects(adopted.projects);
-    }
+    // Settle the decision before awaiting anything, so this can't run twice and
+    // hand the same work over twice.
+    setPendingGuestAdoption(false);
     // 'keep-separate': the account brought its own diagrams (pulled from the
     // cloud), so the signed-out work stays where it is, ready for next time.
-    setPendingGuestAdoption(false);
+    if (decision !== 'adopt') return;
+
+    let cancelled = false;
+    void (async () => {
+      const adopted = await adoptScope(GUEST_SCOPE, storeScope);
+      if (cancelled) return;
+      setGraphs(adopted.graphs);
+      setProjects(adopted.projects);
+    })();
+    return () => { cancelled = true; };
   }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, graphs.length, projects.length]);
 
   // Keep live refs in sync for dep-free callbacks (see applyRemote).
@@ -388,12 +408,12 @@ export default function App() {
   // outgoing account's diagrams over the incoming account's.
   useEffect(() => {
     if (!hasInitialized || loadedScope === null || loadedScope !== storeScope) return;
-    writeGraphs(loadedScope, graphs);
+    void writeGraphs(loadedScope, graphs);
   }, [graphs, hasInitialized, loadedScope, storeScope]);
 
   useEffect(() => {
     if (!hasInitialized || loadedScope === null || loadedScope !== storeScope) return;
-    writeProjects(loadedScope, projects);
+    void writeProjects(loadedScope, projects);
   }, [projects, hasInitialized, loadedScope, storeScope]);
 
   useEffect(() => {
