@@ -194,6 +194,48 @@ interface RemoteGraphRow {
     deleted: boolean;
 }
 
+/**
+ * A graph row without its `data` blob. Reconciliation only needs the
+ * timestamps and flags to decide what to do; `data` is fetched afterwards for
+ * the handful of rows actually being pulled.
+ */
+type RemoteGraphMeta = Omit<RemoteGraphRow, 'data'>;
+
+/** Columns that decide reconciliation. Everything here is a few bytes per row. */
+const GRAPH_META_COLUMNS = 'id, project_id, title, created_at_ms, last_modified, deleted';
+
+/**
+ * PostgREST puts filters in the query string, so a single `in.(…)` list of
+ * UUIDs has to stay under the server's URL length limit. 100 ids is ~3.7 KB,
+ * comfortably inside it, and a first sync pulling thousands of graphs just
+ * issues a few requests.
+ */
+const PULL_CHUNK_SIZE = 100;
+
+/**
+ * Fetch the `data` blobs for exactly the graphs being pulled.
+ *
+ * The alternative, selecting `data` for the whole library in the reconciliation
+ * query, downloaded every diagram the user owns on every sync, including the
+ * overwhelmingly common case where nothing changed at all. Supabase's free tier
+ * is metered on egress rather than request count, so trading one large response
+ * for a small one plus an occasional second round trip is a large saving and
+ * costs nothing measurable.
+ */
+async function fetchGraphData(ids: string[]): Promise<Map<string, Graph | Record<string, never>>> {
+    const out = new Map<string, Graph | Record<string, never>>();
+    if (!supabase || ids.length === 0) return out;
+    for (let i = 0; i < ids.length; i += PULL_CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + PULL_CHUNK_SIZE);
+        const { data, error } = await supabase.from('graphs').select('id, data').in('id', chunk);
+        if (error) throw new Error(friendlySyncError(error.message));
+        for (const row of (data ?? []) as { id: string; data: Graph | Record<string, never> }[]) {
+            out.set(row.id, row.data);
+        }
+    }
+    return out;
+}
+
 interface RemoteProjectRow {
     id: string;
     user_id?: string;
@@ -315,14 +357,16 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
 
     const tombs = loadTombstones();
 
+    // Graphs are fetched without their `data` blob; projects are fetched whole
+    // because their payload *is* the metadata (name, description, colour).
     const [graphRes, projectRes] = await Promise.all([
-        supabase.from('graphs').select('id, project_id, title, data, created_at_ms, last_modified, deleted'),
+        supabase.from('graphs').select(GRAPH_META_COLUMNS),
         supabase.from('projects').select('id, name, description, color, created_at_ms, last_modified, deleted'),
     ]);
     if (graphRes.error) throw new Error(friendlySyncError(graphRes.error.message));
     if (projectRes.error) throw new Error(friendlySyncError(projectRes.error.message));
 
-    const remoteGraphs = (graphRes.data ?? []) as RemoteGraphRow[];
+    const remoteGraphs = (graphRes.data ?? []) as RemoteGraphMeta[];
     const remoteProjects = (projectRes.data ?? []) as RemoteProjectRow[];
 
     let pushed = 0;
@@ -420,6 +464,11 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
         return { ...data, id: row.id, lastModified: row.last_modified };
     };
 
+    // Reconciliation runs on metadata alone and records which rows it wants;
+    // their `data` is fetched in one batch afterwards. A sync that finds nothing
+    // to pull therefore never asks for a single diagram payload.
+    const toPull: RemoteGraphMeta[] = [];
+
     for (const remote of remoteGraphs) {
         const local = finalGraphs.get(remote.id);
         if (remote.deleted) {
@@ -436,12 +485,7 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
         }
         if (local) {
             if (remote.last_modified > (local.lastModified ?? 0)) {
-                const pulledGraph = remoteRowToGraph(remote);
-                if (pulledGraph) {
-                    finalGraphs.set(remote.id, pulledGraph);
-                    changedLocal = true;
-                    pulled++;
-                }
+                toPull.push(remote);
             } else if (remote.last_modified < (local.lastModified ?? 0)) {
                 graphRows.push(graphToRow(local, userId));
             }
@@ -451,15 +495,30 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
                 graphTombRows.push(graphTombstoneRow(remote.id, userId, tombTs));
                 graphTombIds.add(remote.id);
             } else {
-                const pulledGraph = remoteRowToGraph(remote);
-                if (pulledGraph) {
-                    finalGraphs.set(remote.id, pulledGraph);
-                    changedLocal = true;
-                    pulled++;
-                }
+                toPull.push(remote);
             }
         }
     }
+
+    // Must land before the local-only push scan and the tombstone sweep below,
+    // both of which read the finished `finalGraphs`.
+    if (toPull.length > 0) {
+        const blobs = await fetchGraphData(toPull.map((r) => r.id));
+        for (const remote of toPull) {
+            const data = blobs.get(remote.id);
+            // Absent means the row was hard-deleted between the two queries;
+            // malformed means the blob is unusable. Either way, skip it rather
+            // than writing a broken graph into local state.
+            if (data === undefined) continue;
+            const pulledGraph = remoteRowToGraph({ ...remote, data });
+            if (pulledGraph) {
+                finalGraphs.set(remote.id, pulledGraph);
+                changedLocal = true;
+                pulled++;
+            }
+        }
+    }
+
     for (const local of finalGraphs.values()) {
         if (!remoteGraphMap.has(local.id)) {
             graphRows.push(graphToRow(local, userId));
