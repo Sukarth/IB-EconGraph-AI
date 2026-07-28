@@ -578,13 +578,21 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
             return true;
         });
         if (changedRows.length > 0) {
-            const versionRows = changedRows.map((row) => ({
-                graph_id: row.id,
-                user_id: userId,
-                title: row.title,
-                data: row.data,
-                last_modified: row.last_modified,
-            }));
+            // Sorted by graph id because this is one multi-row insert, so it is
+            // one transaction, and the per-row cap trigger takes a
+            // transaction-scoped advisory lock per graph as the rows go in. Two
+            // devices pushing an overlapping set in their own library order
+            // would take those locks in opposite orders and deadlock. Sorting
+            // gives every client the same order, so they queue instead.
+            const versionRows = [...changedRows]
+                .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+                .map((row) => ({
+                    graph_id: row.id,
+                    user_id: userId,
+                    title: row.title,
+                    data: row.data,
+                    last_modified: row.last_modified,
+                }));
             const { error } = await supabase.from('graph_versions').insert(versionRows as never[]);
             if (error) {
                 // Queue for the next sync rather than dropping the revision.

@@ -115,7 +115,7 @@ To serve the production build locally.
 ├── index.tsx                   # React DOM initialization
 ├── types.ts / paletteTypes.ts  # TypeScript type definitions
 ├── vite.config.ts              # Vite config + dev-only API function shim
-├── vercel.json                 # Routing/rewrites for the deployment
+├── vercel.json                 # Routing, rewrites and function limits
 ├── .env.example                # Every supported environment variable
 ├── .github/workflows/
 │   ├── db-keepalive.yml        # Pings the DB so a free project never pauses

@@ -31,14 +31,28 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    // Passing `signal: controller.signal` overwrites whatever the caller put in
+    // `init`, so their own cancellation would quietly stop working. Chain the
+    // two instead: either one aborts the request.
+    const external = init.signal ?? undefined;
+    const forwardAbort = () => controller.abort();
+    if (external) {
+        if (external.aborted) controller.abort();
+        else external.addEventListener('abort', forwardAbort, { once: true });
+    }
+
     try {
         return await fetch(input, { ...init, signal: controller.signal });
     } catch (err) {
         // Distinguish our own deadline from a network failure or a caller's
-        // abort, so the message can say which one happened.
+        // abort, so the message can say which one happened. The caller's abort
+        // is theirs to describe, so it propagates untouched.
+        if (external?.aborted) throw err;
         if (controller.signal.aborted) throw new RequestTimeoutError();
         throw err;
     } finally {
         clearTimeout(timer);
+        external?.removeEventListener('abort', forwardAbort);
     }
 }
