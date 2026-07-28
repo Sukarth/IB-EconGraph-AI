@@ -517,6 +517,7 @@ export default function App() {
   // Keep the document title and canonical URL in sync with the SPA route so
   // content routes (/pricing, /compare) self-canonicalize instead of being
   // seen as duplicates of the homepage's hardcoded canonical.
+  const countedFirstViewRef = useRef(false);
   useEffect(() => {
     const SITE = 'https://ib-econgraph-ai.vercel.app';
     const meta: Record<string, { title: string; path: string }> = {
@@ -536,6 +537,25 @@ export default function App() {
       document.head.appendChild(link);
     }
     link.href = SITE + entry.path;
+
+    // GoatCounter counts the first load itself (the tag in index.html), so only
+    // report navigations after that, otherwise every visit double-counts its
+    // entry page. Views with no metadata entry are app UI rather than content;
+    // report the real path for those, minus any share slug, which is a
+    // capability token and must not reach an analytics endpoint.
+    if (!countedFirstViewRef.current) {
+      countedFirstViewRef.current = true;
+      return;
+    }
+    const countedPath = meta[view]
+      ? entry.path
+      : window.location.pathname.replace(/^\/s\/[^/]+\/?$/, '/s/');
+    // Optional chaining throughout: the tag is `async`, so on a fast navigation
+    // it may not have loaded yet. A missed count is fine; a crash is not.
+    const gc = (window as unknown as {
+      goatcounter?: { count?: (opts: { path: string; title: string }) => void };
+    }).goatcounter;
+    gc?.count?.({ path: countedPath, title: entry.title });
   }, [view]);
 
   // Scroll the chat to the bottom when a message is added to the open graph (or

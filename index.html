@@ -54,6 +54,23 @@
     }
   </script>
 
+  <!-- GoatCounter: privacy-friendly page counts. No cookies, no cross-site
+       tracking. `async` so it never blocks rendering, and the SPA re-counts on
+       route changes itself (see the meta effect in App.tsx).
+
+       The settings object must be defined before count.js runs. Its `path`
+       hook strips the slug out of share URLs: /s/<slug> is a capability token
+       that grants anyone who holds it read access to a diagram, so it must
+       never be sent to a third-party endpoint. Everything else is reported
+       unchanged. -->
+  <script>
+    window.goatcounter = {
+      path: function (p) { return p.replace(/^\/s\/[^/]+\/?$/, '/s/'); }
+    };
+  </script>
+  <script data-goatcounter="https://ib-econgraph-ai.goatcounter.com/count"
+          async src="//gc.zgo.at/count.js"></script>
+
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>

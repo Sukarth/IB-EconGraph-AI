@@ -21,6 +21,11 @@ if (!existsSync(DIST)) {
 
 const BUILD_DATE = new Date().toISOString().slice(0, 10);
 
+// These pages are standalone HTML, not the SPA, so they need their own copy of
+// the analytics tag. Keep it identical to the one in index.html.
+const GOATCOUNTER =
+    '<script data-goatcounter="https://ib-econgraph-ai.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>';
+
 // Inline right-arrow used on call-to-action links (in place of a literal arrow
 // character). Inherits the link's color; small left margin for spacing.
 const ARROW = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-left:.4em"><path d="M5 12h14"/><path d="m13 5 7 7-7 7"/></svg>';
@@ -204,6 +209,7 @@ function pageShell({ title, description, canonicalPath, jsonLd, bodyHtml }) {
 <meta name="twitter:title" content="${esc(title)}"/>
 <meta name="twitter:description" content="${esc(description)}"/>
 ${jsonLd.map((obj) => `<script type="application/ld+json">${JSON.stringify(obj)}</script>`).join('\n')}
+${GOATCOUNTER}
 <style>${CSS}</style>
 </head>
 <body>

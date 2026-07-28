@@ -142,15 +142,6 @@ Cost check: Gemini Flash costs well under $0.01 per diagram generation, so 150
 generations cost far less than the $5/month plan price. Vertex (A/B) bills
 through Google Cloud; AI Studio (C) has a free tier.
 
-> **Privacy consequence of this choice.** The three backends are not equivalent
-> for user data. Google's paid Cloud/Vertex endpoints (A and B) are covered by
-> terms that exclude training on customer content; the free Gemini developer
-> tier (C) permits Google to review content and use it to improve its services.
-> The privacy policy in `components/LegalPages.tsx` describes both cases, so it
-> stays accurate whichever you pick, but if you run a public deployment on
-> Option C your users' prompts are handled under the free-tier terms. Prefer A
-> or B for anything beyond personal or testing use.
-
 ## 3. Polar (billing)
 
 1. Create an organization at [polar.sh](https://polar.sh)
