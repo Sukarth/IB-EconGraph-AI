@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pricing page (`/pricing`) and fact-checked comparison page (`/compare`)
 - 12 prerendered SEO landing pages (`/diagrams/*`) with IB-specific content,
   generated at build time along with the sitemap
+- **Per-account local storage**: each account that signs in on a browser gets
+  its own local diagrams, alongside a shared one for work done signed out.
+  Switching accounts on a shared computer no longer erases anyone's work.
+  Signed-out work is handed to the account you sign into only when that account
+  has no diagrams of its own, so two people's diagrams are never merged
 - Supporter recognition: opt-in name listing in the README
 - Backend setup guide (`docs/BACKEND_SETUP.md`): all cloud features degrade
   gracefully when unconfigured, so forks stay zero-config

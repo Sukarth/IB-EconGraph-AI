@@ -19,7 +19,12 @@ interface UseCloudSyncOptions {
     hasInitialized: boolean;
     graphs: Graph[];
     projects: Project[];
-    applyRemote: (graphs: Graph[], projects: Project[]) => void;
+    /**
+     * Hand merged cloud state back to the app. `userId` identifies the account
+     * the sync ran for, so a result that arrives after an account switch can be
+     * discarded rather than imported into whoever is signed in now.
+     */
+    applyRemote: (graphs: Graph[], projects: Project[], userId: string) => void;
 }
 
 /**
@@ -71,7 +76,7 @@ export function useCloudSync({ userId, hasInitialized, graphs, projects, applyRe
 
             const localMoved = graphsRef.current !== startGraphs || projectsRef.current !== startProjects;
             if (outcome.changedLocal && !localMoved) {
-                applyRemoteRef.current(outcome.graphs, outcome.projects);
+                applyRemoteRef.current(outcome.graphs, outcome.projects, uid);
             } else if (outcome.changedLocal && localMoved) {
                 // Local state advanced while we were syncing — run again rather
                 // than applying a stale merge.

@@ -5,6 +5,16 @@ import { getAIProvider } from './services/aiProvider';
 import { useAuth } from './services/auth';
 import { useCloudSync } from './services/useCloudSync';
 import { recordTombstones, clearTombstones, fetchCloudIds } from './services/sync';
+import {
+  GUEST_SCOPE,
+  migrateLegacyStore,
+  readScope,
+  writeGraphs,
+  writeProjects,
+  scopeHasContent,
+  adoptScope,
+  decideGuestAdoption,
+} from './services/localStore';
 import DiagramRenderer from './components/DiagramRenderer';
 import LandingPage from './components/LandingPage';
 import HomePage from './components/HomePage';
@@ -29,16 +39,13 @@ import {
 
 const generateId = () => uuidv4();
 
+// Diagrams and projects are stored per account (see services/localStore.ts).
+// These keys are editor preferences, which are deliberately shared across
+// accounts on the same browser: they describe the tool, not anyone's work.
 const STORAGE_KEYS = {
-  graphs: 'econgraph_graphs',
-  projects: 'econgraph_projects',
   settings: 'econgraph_settings',
   specialColors: 'econgraph_special_colors',
   standardColors: 'econgraph_standard_colors',
-  // Which account the locally-stored graphs/projects belong to. The store is
-  // global (not per-user), so this lets us detect an account switch on a shared
-  // browser and avoid attributing one person's diagrams to another.
-  owner: 'econgraph_owner'
 };
 
 const DEFAULT_STANDARD_COLORS = [
@@ -167,14 +174,28 @@ export default function App() {
   const { showTooltip: showSendTooltip, hideTooltip: hideSendTooltip, TooltipPortal: SendTooltipPortal } = usePortalTooltip({ delay: 400, placement: 'top' });
 
   // --- Cloud (accounts + sync are Supporter features; app is fully usable without) ---
-  const { configured: cloudConfigured, user, isPro } = useAuth();
+  const { configured: cloudConfigured, loading: authLoading, user, isPro } = useAuth();
 
   // Live refs so applyRemote (a stable, dep-free callback) can see the graph
   // currently open in the editor without being re-created on every edit.
   const activeGraphIdRef = useRef<string | null>(null);
   const currentDiagramRef = useRef<DiagramData>(INITIAL_DIAGRAM);
 
-  const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[]) => {
+  // Which account's local data is live. `null` while the session is still being
+  // restored, so we don't briefly load guest data for someone who is signed in.
+  const storeScope = authLoading ? null : (user?.id ?? GUEST_SCOPE);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  const loadedScopeRef = useRef<string | null>(null);
+  loadedScopeRef.current = loadedScope;
+  // True between signing in and deciding whether signed-out work joins this
+  // account. The editor holds off creating a blank diagram until it resolves.
+  const [pendingGuestAdoption, setPendingGuestAdoption] = useState(false);
+
+  const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[], forUserId: string) => {
+    // A sync that lands after the account changed is carrying the previous
+    // account's cloud data. Dropping it keeps that data out of this account
+    // (and off this account's next upload).
+    if (loadedScopeRef.current !== forUserId) return;
     setGraphs(remoteGraphs);
     setProjects(remoteProjects);
     // If the graph open in the editor was changed by this pull (e.g. edited on
@@ -197,7 +218,10 @@ export default function App() {
   }, []);
 
   const { syncState, syncNow } = useCloudSync({
-    userId: user && isPro ? user.id : null,
+    // Withhold the account until its own local data is the data in memory.
+    // Syncing during a switch, while the previous account's diagrams are still
+    // loaded, would upload them into this account.
+    userId: user && isPro && loadedScope === user.id ? user.id : null,
     hasInitialized,
     graphs,
     projects,
@@ -207,28 +231,26 @@ export default function App() {
   // A signed-in Supporter's local store can be empty simply because the first
   // cloud pull hasn't landed yet, used below to avoid creating (and syncing
   // up) a throwaway blank graph before we've heard whether the cloud has data.
+  // 'disabled' counts too: for a Supporter it means the sync loop hasn't picked
+  // this account up yet, which is still "before the first pull". Without it
+  // there's a render where the store looks empty and the editor would create a
+  // blank diagram (and upload it) moments before the real data arrives.
   const awaitingFirstPull =
     cloudConfigured && !!user && isPro &&
     syncState.lastSyncedAt === null &&
-    (syncState.status === 'idle' || syncState.status === 'syncing');
+    (syncState.status === 'idle' || syncState.status === 'syncing' || syncState.status === 'disabled');
 
-  // --- Load from localStorage on mount ---
+  // --- Load shared editor preferences on mount ---
+  // Diagrams and projects are NOT loaded here: they belong to whichever account
+  // is signed in, which isn't known until the session has been restored. See
+  // the scope effect below.
   useEffect(() => {
+    migrateLegacyStore();
     try {
-      const savedGraphs = localStorage.getItem(STORAGE_KEYS.graphs);
-      const savedProjects = localStorage.getItem(STORAGE_KEYS.projects);
       const savedSettings = localStorage.getItem(STORAGE_KEYS.settings);
       const savedSpecial = localStorage.getItem(STORAGE_KEYS.specialColors);
       const savedStandard = localStorage.getItem(STORAGE_KEYS.standardColors);
 
-      if (savedGraphs) {
-        const parsed = JSON.parse(savedGraphs) as Graph[];
-        setGraphs(parsed);
-      }
-      if (savedProjects) {
-        const parsed = JSON.parse(savedProjects) as Project[];
-        setProjects(parsed);
-      }
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         setSettings(s => ({ ...s, ...parsed }));
@@ -246,39 +268,67 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.error('Failed to load data from localStorage:', e);
+      console.error('Failed to load preferences from localStorage:', e);
     }
-    setHasInitialized(true);
   }, []);
 
-  // --- Guard against cross-account data bleed on a shared browser ---
-  // The local store is global (not per-user). When a DIFFERENT account signs in,
-  // the previous user's diagrams must not be treated as (and synced up into) the
-  // new account. Anonymous local work (no recorded owner) is still migrated to
-  // the first account that signs in; the same user signing back in keeps theirs.
+  // --- Per-account local data ---
+  // Everyone who uses this browser gets their own namespace: one per signed-in
+  // account, plus a shared "guest" one for work done signed out. Switching
+  // accounts swaps which namespace is live, and never deletes the other one.
   useEffect(() => {
-    if (!hasInitialized) return;
-    const uid = user?.id ?? null;
-    if (!uid) return; // signed out: leave local data + owner untouched
-    let owner: string | null = null;
-    try { owner = localStorage.getItem(STORAGE_KEYS.owner); } catch { /* ignore */ }
-    if (owner && owner !== uid) {
-      // Someone else's local data, clear it so it isn't attributed to this
-      // account. Their data is safe in their own cloud (if a Supporter).
-      setGraphs([]);
-      setProjects([]);
-      setActiveGraphId(null);
-      // Also blank the canvas and its undo stack. Clearing the collections
-      // alone leaves the previous account's open diagram on screen until the
-      // first cloud pull lands, which is exactly what this guard is for.
-      const blank = { ...EMPTY_DIAGRAM };
-      setCurrentDiagram(blank);
-      setHistory([blank]);
-      historyRef.current = [blank];
-      setHistoryIndex(0);
+    if (storeScope === null || storeScope === loadedScope) return;
+    const stored = readScope(storeScope);
+    setGraphs(stored.graphs);
+    setProjects(stored.projects);
+    // Signing in with nothing of your own, over work done signed out, is the
+    // one case where the two might be joined. Flag it here so the editor waits
+    // for that decision instead of creating a blank diagram in the meantime.
+    setPendingGuestAdoption(
+      storeScope !== GUEST_SCOPE
+      && stored.graphs.length === 0
+      && stored.projects.length === 0
+      && scopeHasContent(GUEST_SCOPE)
+    );
+    // Close whatever was open and blank the canvas: it belongs to the namespace
+    // we're leaving. The auto-open effect below picks this account's most
+    // recent diagram once its data is in place.
+    setActiveGraphId(null);
+    const blank = { ...EMPTY_DIAGRAM };
+    setCurrentDiagram(blank);
+    setHistory([blank]);
+    historyRef.current = [blank];
+    setHistoryIndex(0);
+    setLoadedScope(storeScope);
+    setHasInitialized(true);
+  }, [storeScope, loadedScope]);
+
+  // --- Hand guest work to the account that signs in ---
+  // Work done signed out should follow you into your account, but only when
+  // doing so can't mix it into diagrams that are already there. So we adopt it
+  // only if this account has nothing of its own, and for Supporters only once
+  // the first cloud pull has told us whether the account is really empty.
+  // Otherwise the guest namespace is left untouched, and signing out returns to
+  // it intact.
+  useEffect(() => {
+    if (storeScope === null) return;
+    const decision = decideGuestAdoption({
+      pending: pendingGuestAdoption,
+      scopeReady: loadedScope === storeScope,
+      awaitingFirstPull,
+      accountHasContent: graphs.length > 0 || projects.length > 0,
+    });
+    if (decision === 'wait') return;
+
+    if (decision === 'adopt') {
+      const adopted = adoptScope(GUEST_SCOPE, storeScope);
+      setGraphs(adopted.graphs);
+      setProjects(adopted.projects);
     }
-    try { localStorage.setItem(STORAGE_KEYS.owner, uid); } catch { /* ignore */ }
-  }, [user?.id, hasInitialized]);
+    // 'keep-separate': the account brought its own diagrams (pulled from the
+    // cloud), so the signed-out work stays where it is, ready for next time.
+    setPendingGuestAdoption(false);
+  }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, graphs.length, projects.length]);
 
   // Keep live refs in sync for dep-free callbacks (see applyRemote).
   useEffect(() => { activeGraphIdRef.current = activeGraphId; }, [activeGraphId]);
@@ -304,6 +354,10 @@ export default function App() {
       // Wait for the first cloud pull before assuming a Supporter has no graphs
       //, otherwise we'd create a blank one and sync it up as clutter.
       if (awaitingFirstPull) return;
+      // Likewise, don't create one while work done signed out is about to be
+      // handed to this account: that would leave a stray blank diagram beside it
+      // (and select it, since the graph below is chosen unconditionally).
+      if (pendingGuestAdoption) return;
       // Create new graph if none exist
       const newGraph: Graph = {
         id: generateId(),
@@ -326,26 +380,21 @@ export default function App() {
       historyRef.current = [newGraph.diagramData];
       setHistoryIndex(0);
     }
-  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
+  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
+  // Only write once the namespace in memory is the one we last loaded. During an
+  // account switch those differ for a render, and writing then would save the
+  // outgoing account's diagrams over the incoming account's.
   useEffect(() => {
-    if (!hasInitialized) return;
-    try {
-      localStorage.setItem(STORAGE_KEYS.graphs, JSON.stringify(graphs));
-    } catch (e) {
-      console.error('Failed to save graphs:', e);
-    }
-  }, [graphs, hasInitialized]);
+    if (!hasInitialized || loadedScope === null || loadedScope !== storeScope) return;
+    writeGraphs(loadedScope, graphs);
+  }, [graphs, hasInitialized, loadedScope, storeScope]);
 
   useEffect(() => {
-    if (!hasInitialized) return;
-    try {
-      localStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects));
-    } catch (e) {
-      console.error('Failed to save projects:', e);
-    }
-  }, [projects, hasInitialized]);
+    if (!hasInitialized || loadedScope === null || loadedScope !== storeScope) return;
+    writeProjects(loadedScope, projects);
+  }, [projects, hasInitialized, loadedScope, storeScope]);
 
   useEffect(() => {
     if (!hasInitialized) return;
