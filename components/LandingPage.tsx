@@ -22,7 +22,33 @@ export interface LandingPageProps {
     onGoHome: () => void;
     onOpenPricing: () => void;
     onOpenCompare: () => void;
+    onOpenPrivacy: () => void;
+    onOpenTerms: () => void;
 }
+
+/**
+ * Footer legal link. Stays a real `<a>` so it is crawlable, middle-clickable
+ * and shows its target on hover, but a plain left click routes through the SPA
+ * instead of reloading the whole bundle. Modifier clicks are left to the
+ * browser.
+ */
+const RouteLink: React.FC<{ href: string; onNavigate: () => void; children: React.ReactNode }> = ({
+    href,
+    onNavigate,
+    children,
+}) => (
+    <a
+        href={href}
+        onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            e.preventDefault();
+            onNavigate();
+        }}
+        className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
+    >
+        {children}
+    </a>
+);
 
 // ─── Fade-in on scroll component ───
 const ScrollReveal: React.FC<{
@@ -73,7 +99,7 @@ const ScrollReveal: React.FC<{
     );
 };
 
-const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOpenCompare }) => {
+const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOpenCompare, onOpenPrivacy, onOpenTerms }) => {
     const [scrollY, setScrollY] = useState(0);
     const [heroTilt, setHeroTilt] = useState({ rotateX: 0, rotateY: 0 });
     const [openSourceMouse, setOpenSourceMouse] = useState({ x: 50, y: 50 });
@@ -269,7 +295,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                                     <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                                 </button>
                             </div>
-                            <p className="text-sm text-gray-400 mt-5 flex items-center justify-center gap-1.5">
+                            <p className="text-sm text-gray-500 mt-5 flex items-center justify-center gap-1.5">
                                 <Heart className="w-3.5 h-3.5 text-rose-400" />
                                 Everything a student needs to finish their IA is free and unlimited, forever.
                             </p>
@@ -731,39 +757,29 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                         </div>
                         <span className="font-semibold text-gray-900">IB EconGraph AI</span>
                     </div>
-                    <p className="text-sm text-gray-400">
+                    <p className="text-sm text-gray-500">
                         Free & open source. Built for IB Economics students and educators.
                     </p>
                     <div className="flex flex-wrap items-center justify-center gap-4">
                         <button
                             onClick={onOpenPricing}
-                            className="text-sm text-gray-400 hover:text-gray-900 transition-colors"
+                            className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
                         >
                             Pricing
                         </button>
                         <button
                             onClick={onOpenCompare}
-                            className="text-sm text-gray-400 hover:text-gray-900 transition-colors"
+                            className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
                         >
                             Compare
                         </button>
-                        <a
-                            href="/privacy"
-                            className="text-sm text-gray-400 hover:text-gray-900 transition-colors"
-                        >
-                            Privacy
-                        </a>
-                        <a
-                            href="/terms"
-                            className="text-sm text-gray-400 hover:text-gray-900 transition-colors"
-                        >
-                            Terms
-                        </a>
+                        <RouteLink href="/privacy" onNavigate={onOpenPrivacy}>Privacy</RouteLink>
+                        <RouteLink href="/terms" onNavigate={onOpenTerms}>Terms</RouteLink>
                         <a
                             href="https://ko-fi.com/sukarth"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-1.5 text-gray-400 hover:text-gray-900 text-sm transition-colors"
+                            className="flex items-center gap-1.5 text-gray-500 hover:text-gray-900 text-sm transition-colors"
                         >
                             <Heart className="w-3.5 h-3.5" />
                             Support
@@ -772,13 +788,13 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                             href="https://github.com/sukarth/IB-EconGraph-AI"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2 text-gray-400 hover:text-gray-900 text-sm transition-colors"
+                            className="flex items-center gap-2 text-gray-500 hover:text-gray-900 text-sm transition-colors"
                         >
                             <Github className="w-4 h-4" />
                             GitHub
                         </a>
                         <span className="text-gray-200">|</span>
-                        <span className="text-sm text-gray-400">AGPL-3.0</span>
+                        <span className="text-sm text-gray-500">AGPL-3.0</span>
                     </div>
                 </div>
             </footer>

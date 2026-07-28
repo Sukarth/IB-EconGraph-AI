@@ -40,6 +40,19 @@ interface SubscriptionLike {
     /** When Polar last changed this subscription. Used to order deliveries. */
     modifiedAt?: Date | null;
     createdAt?: Date | null;
+    /** Set when the user has cancelled but keeps access to the end of the paid period. */
+    cancelAtPeriodEnd?: boolean | null;
+    /** The definitive end of access once cancellation is scheduled. */
+    endsAt?: Date | null;
+}
+
+function toDate(value: unknown): Date | null {
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+    if (typeof value === 'string') {
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    }
+    return null;
 }
 
 /**
@@ -63,31 +76,30 @@ function eventTimestamp(sub: SubscriptionLike): Date | null {
     return null;
 }
 
-async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
-    const userId = sub.customer?.externalId;
-    if (!userId) {
-        // Checkout created outside the app (no external customer id) — nothing to map to.
-        console.warn(`polar webhook: subscription ${sub.id} has no external customer id, skipping`);
-        return;
-    }
+/** What the profile row currently says about this user's billing. */
+export interface CurrentBillingState {
+    polar_subscription_id?: string | null;
+    pro_until?: string | null;
+    polar_event_at?: string | null;
+}
 
-    const admin = getSupabaseAdmin();
+export type EntitlementDecision =
+    | { action: 'skip'; reason: string }
+    | { action: 'apply'; proUntil: string; eventAt: string | null };
+
+/**
+ * Decide what an incoming subscription event should do to a profile. Pure, so
+ * the ordering and entitlement rules below can be exercised directly instead of
+ * only through a live webhook against real billing.
+ *
+ * `now` is injected for the same reason.
+ */
+export function decideEntitlement(
+    sub: SubscriptionLike,
+    current: CurrentBillingState | null,
+    now: number = Date.now(),
+): EntitlementDecision {
     const entitled = ENTITLED_POLAR_STATUSES.has(sub.status);
-
-    // Read what's currently on file so out-of-order or superseded events for a
-    // DIFFERENT subscription can't clobber the one the user is actually on
-    // (e.g. after cancel + resubscribe, a delayed event for the old sub).
-    const { data: current, error: currentError } = await admin
-        .from('profiles')
-        .select('polar_subscription_id, pro_until, polar_event_at')
-        .eq('id', userId)
-        .maybeSingle();
-    if (currentError) {
-        // Without the current row we can't tell a superseded event from a live
-        // one. Throwing makes the handler answer 500 so Polar retries, which is
-        // safer than guessing and possibly revoking an active subscription.
-        throw new Error(`could not read profile ${userId}: ${currentError.message}`);
-    }
     const onFile = current?.polar_subscription_id;
     const differentSub = !!onFile && onFile !== sub.id;
     const DAY_MS = 24 * 60 * 60 * 1000;
@@ -102,46 +114,93 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     const eventAt = eventTimestamp(sub);
     const appliedAt = current?.polar_event_at ? Date.parse(current.polar_event_at) : null;
     if (eventAt && appliedAt !== null && eventAt.getTime() < appliedAt) {
-        console.log(
-            `polar webhook: ignoring ${sub.status} for ${sub.id}; event is older ` +
-            `(${eventAt.toISOString()}) than the last applied (${current!.polar_event_at})`,
-        );
-        return;
+        return {
+            action: 'skip',
+            reason: `event for ${sub.id} is older (${eventAt.toISOString()}) than the last applied (${current!.polar_event_at})`,
+        };
     }
+    const eventAtIso = eventAt ? eventAt.toISOString() : null;
 
     let proUntil: string;
     if (entitled) {
-        const hasPeriodEnd = sub.currentPeriodEnd instanceof Date && !Number.isNaN(sub.currentPeriodEnd.getTime());
+        // Polar keeps a subscription `active` after the user schedules a
+        // cancellation; it just stops renewing. Access through the period they
+        // already paid for is correct and deliberate, but `endsAt` is then the
+        // authoritative end date, and the renewal margin must not apply: that
+        // margin exists to cover the gap before a *renewal* webhook lands, and
+        // a subscription that will not renew has no such gap. Adding it would
+        // hand out a day of access nobody paid for.
+        const endsAt = toDate(sub.endsAt);
+        const scheduledToEnd = sub.cancelAtPeriodEnd === true || !!endsAt;
+        const periodEnd = endsAt ?? toDate(sub.currentPeriodEnd);
+
         // A malformed event with no usable period end must not lock out an
         // entitled user: fall back to a short provisional window (a later,
         // well-formed event corrects it) rather than "now", which reads as expired.
-        const candidate = hasPeriodEnd
-            ? sub.currentPeriodEnd!.getTime() + ACTIVE_MARGIN_DAYS * DAY_MS
-            : Date.now() + 2 * DAY_MS;
-        if (!hasPeriodEnd) {
-            console.warn(`polar webhook: entitled event for ${sub.id} has no currentPeriodEnd; using provisional window`);
-        }
+        const candidate = periodEnd
+            ? periodEnd.getTime() + (scheduledToEnd ? 0 : ACTIVE_MARGIN_DAYS * DAY_MS)
+            : now + 2 * DAY_MS;
 
         // A delayed/retried event from a different (older) subscription must not
         // shorten access the user has via the current one — only let a different
         // subscription take over if it actually extends access.
         if (differentSub && candidate <= currentEnd) {
-            console.log(`polar webhook: ignoring stale entitled event for ${sub.id}; ${onFile} on file runs at least as long`);
-            return;
+            return {
+                action: 'skip',
+                reason: `stale entitled event for ${sub.id}; ${onFile} on file runs at least as long`,
+            };
         }
-        // Never move a still-entitled user's access backward — a delayed or
-        // retried event (even for the SAME subscription) can carry an older
-        // period end than one already applied.
-        proUntil = new Date(Math.max(candidate, currentEnd)).toISOString();
+        // Normally never move a still-entitled user's access backward. A
+        // scheduled cancellation is the exception: it legitimately shortens
+        // access (dropping the margin, or moving to an earlier endsAt), and the
+        // event-ordering check above already rejects genuinely stale deliveries,
+        // which is what this guard used to be protecting against.
+        proUntil = new Date(scheduledToEnd ? candidate : Math.max(candidate, currentEnd)).toISOString();
     } else {
         // canceled / revoked / unpaid / incomplete → access ends now, but only
         // for the subscription currently on file (never for a stale old one).
         if (differentSub) {
-            console.log(`polar webhook: ignoring ${sub.status} for stale subscription ${sub.id} (current is ${onFile})`);
-            return;
+            return {
+                action: 'skip',
+                reason: `${sub.status} for stale subscription ${sub.id} (current is ${onFile})`,
+            };
         }
-        proUntil = new Date().toISOString();
+        proUntil = new Date(now).toISOString();
     }
+
+    return { action: 'apply', proUntil, eventAt: eventAtIso };
+}
+
+async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
+    const userId = sub.customer?.externalId;
+    if (!userId) {
+        // Checkout created outside the app (no external customer id) — nothing to map to.
+        console.warn(`polar webhook: subscription ${sub.id} has no external customer id, skipping`);
+        return;
+    }
+
+    const admin = getSupabaseAdmin();
+
+    // Read what's currently on file so out-of-order or superseded events can't
+    // clobber the state the user is actually in.
+    const { data: current, error: currentError } = await admin
+        .from('profiles')
+        .select('polar_subscription_id, pro_until, polar_event_at')
+        .eq('id', userId)
+        .maybeSingle();
+    if (currentError) {
+        // Without the current row we can't tell a superseded event from a live
+        // one. Throwing makes the handler answer 500 so Polar retries, which is
+        // safer than guessing and possibly revoking an active subscription.
+        throw new Error(`could not read profile ${userId}: ${currentError.message}`);
+    }
+
+    const decision = decideEntitlement(sub, current as CurrentBillingState | null);
+    if (decision.action === 'skip') {
+        console.log(`polar webhook: ignoring ${decision.reason}`);
+        return;
+    }
+    const { proUntil, eventAt: eventAtIso } = decision;
 
     // The read above and this write are separate round trips, so two concurrent
     // deliveries for the same user can each compute from the same snapshot and
@@ -149,7 +208,6 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     // ordering test as a predicate on the UPDATE makes the decision atomic: a
     // handler whose event has been overtaken matches no row and writes nothing.
     // `lte` rather than `lt` so a retry of the very same event is idempotent.
-    const eventAtIso = eventAt ? eventAt.toISOString() : null;
     let query = admin
         .from('profiles')
         .update({

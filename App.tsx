@@ -1313,6 +1313,8 @@ export default function App() {
         onGoHome={() => navigateToView('home')}
         onOpenPricing={() => navigateToView('pricing')}
         onOpenCompare={() => navigateToView('compare')}
+        onOpenPrivacy={() => navigateToView('privacy')}
+        onOpenTerms={() => navigateToView('terms')}
       />
     );
   }
