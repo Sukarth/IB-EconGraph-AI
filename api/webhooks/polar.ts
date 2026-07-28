@@ -55,6 +55,11 @@ function toDate(value: unknown): Date | null {
     return null;
 }
 
+/** Epoch millis, or null for anything absent or unparseable. Never NaN. */
+function millis(value: unknown): number | null {
+    return toDate(value)?.getTime() ?? null;
+}
+
 /**
  * Ordering key for an event. Webhook deliveries are not ordered and are
  * retried, so "the event that arrived last" is not "the event that happened
@@ -103,7 +108,11 @@ export function decideEntitlement(
     const onFile = current?.polar_subscription_id;
     const differentSub = !!onFile && onFile !== sub.id;
     const DAY_MS = 24 * 60 * 60 * 1000;
-    const currentEnd = current?.pro_until ? Date.parse(current.pro_until) : 0;
+    // `CurrentBillingState` is a plain interface, so nothing guarantees these
+    // two are parseable the way the timestamptz columns they normally come from
+    // would. A NaN reaching `Math.max` below makes `new Date(...).toISOString()`
+    // throw, and a webhook that throws is one Polar retries forever.
+    const currentEnd = millis(current?.pro_until) ?? 0;
 
     // Deliveries are neither ordered nor deduplicated. Checking only that the
     // subscription id matches (as this used to) left the worst case open: a
@@ -112,7 +121,7 @@ export function decideEntitlement(
     // the future pro_until. Comparing the event's own timestamp against the
     // last one applied rejects it.
     const eventAt = eventTimestamp(sub);
-    const appliedAt = current?.polar_event_at ? Date.parse(current.polar_event_at) : null;
+    const appliedAt = millis(current?.polar_event_at);
     if (eventAt && appliedAt !== null && eventAt.getTime() < appliedAt) {
         return {
             action: 'skip',

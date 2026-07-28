@@ -223,28 +223,33 @@ async function migrateToIndexedDb(database: IDBDatabase): Promise<void> {
         return;
     }
 
+    // Every namespace left behind has to be retried on the next load. Stamping
+    // the version after a partial run would end the retries while reads have
+    // already switched to IndexedDB, so the skipped namespace would sit in
+    // localStorage that nothing ever looks at again.
+    let complete = true;
     for (const collection of COLLECTIONS) {
         const base = BASE_KEYS[collection];
         for (const key of keys) {
             if (key !== base && !key.startsWith(`${base}__u_`)) continue;
             const scope = key === base ? GUEST_SCOPE : key.slice(`${base}__u_`.length);
             let raw: string | null = null;
-            try { raw = localStorage.getItem(key); } catch { continue; }
+            try { raw = localStorage.getItem(key); } catch { complete = false; continue; }
             if (raw === null) continue;
 
             const existing = await idbGet<unknown[]>(database, dbKey(collection, scope));
-            if (!existing.ok) continue; // can't tell what's there; leave the source alone
+            if (!existing.ok) { complete = false; continue; } // can't tell what's there; leave the source alone
             // Only seed a namespace IndexedDB doesn't already know about, so a
             // partially completed run can be repeated safely.
             if (!Array.isArray(existing.value)) {
                 const written = await idbPut(database, dbKey(collection, scope), parseArray(raw));
                 // Keep localStorage as the copy of record until the move lands.
-                if (!written.ok) continue;
+                if (!written.ok) { complete = false; continue; }
             }
             try { localStorage.removeItem(key); } catch { /* ignore */ }
         }
     }
-    writeVersion(VERSION_INDEXEDDB);
+    if (complete) writeVersion(VERSION_INDEXEDDB);
 }
 
 async function init(): Promise<void> {
@@ -296,13 +301,19 @@ export async function requestPersistentStorage(): Promise<boolean> {
 // Reads and writes
 // ---------------------------------------------------------------------------
 
-async function readCollection<T>(collection: Collection, scope: StoreScope): Promise<T[]> {
+/**
+ * `ok` has to reach the caller. A read that failed and a namespace that is
+ * genuinely empty both produce no items, but only one of them means it is safe
+ * to write over what is stored, and the caller is the only one who can tell the
+ * difference in a useful way.
+ */
+async function readCollection<T>(collection: Collection, scope: StoreScope): Promise<{ ok: boolean; items: T[] }> {
     await ready();
     if (db) {
         const result = await idbGet<T[]>(db, dbKey(collection, scope));
-        return Array.isArray(result.value) ? result.value : [];
+        return { ok: result.ok, items: Array.isArray(result.value) ? result.value : [] };
     }
-    return parseArray<T>(lsGet(collection, scope));
+    return { ok: true, items: parseArray<T>(lsGet(collection, scope)) };
 }
 
 // Serialise writes per key: two rapid saves resolving out of order would
@@ -329,13 +340,19 @@ async function writeCollection<T>(collection: Collection, scope: StoreScope, ite
     });
 }
 
-/** Read one account's (or the guest's) stored diagrams and projects. */
-export async function readScope(scope: StoreScope): Promise<{ graphs: Graph[]; projects: Project[] }> {
+/**
+ * Read one account's (or the guest's) stored diagrams and projects.
+ *
+ * `ok` is false when the store could not be read. The arrays are empty then
+ * too, but the caller must not act on that: treating an unreadable namespace as
+ * an empty one is how a library gets overwritten with nothing.
+ */
+export async function readScope(scope: StoreScope): Promise<{ ok: boolean; graphs: Graph[]; projects: Project[] }> {
     const [graphs, projects] = await Promise.all([
         readCollection<Graph>('graphs', scope),
         readCollection<Project>('projects', scope),
     ]);
-    return { graphs, projects };
+    return { ok: graphs.ok && projects.ok, graphs: graphs.items, projects: projects.items };
 }
 
 export function writeGraphs(scope: StoreScope, graphs: Graph[]): Promise<boolean> {
@@ -346,10 +363,14 @@ export function writeProjects(scope: StoreScope, projects: Project[]): Promise<b
     return writeCollection('projects', scope, projects);
 }
 
-/** Whether a namespace holds anything worth keeping. */
+/**
+ * Whether a namespace holds anything worth keeping. False if it could not be
+ * read: the caller uses this to decide whether guest work is waiting to be
+ * adopted, and "we don't know" must not start a move.
+ */
 export async function scopeHasContent(scope: StoreScope): Promise<boolean> {
-    const { graphs, projects } = await readScope(scope);
-    return graphs.length > 0 || projects.length > 0;
+    const { ok, graphs, projects } = await readScope(scope);
+    return ok && (graphs.length > 0 || projects.length > 0);
 }
 
 /**
@@ -402,6 +423,12 @@ export function decideGuestAdoption(input: {
  */
 export async function adoptScope(from: StoreScope, to: StoreScope): Promise<{ graphs: Graph[]; projects: Project[] } | null> {
     const moved = await readScope(from);
+    // Copying nothing and then clearing the source would empty the namespace we
+    // were asked to preserve, which is the one outcome this must never produce.
+    if (!moved.ok) {
+        console.error(`Could not read ${from}; leaving it in place rather than moving an unknown amount of data.`);
+        return null;
+    }
     const [graphsSaved, projectsSaved] = await Promise.all([
         writeGraphs(to, moved.graphs),
         writeProjects(to, moved.projects),

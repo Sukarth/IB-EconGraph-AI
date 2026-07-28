@@ -186,6 +186,9 @@ export default function App() {
   // restored, so we don't briefly load guest data for someone who is signed in.
   const storeScope = authLoading ? null : (user?.id ?? GUEST_SCOPE);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  // Browser storage refused to give up this namespace. Saving is off for the
+  // session so the stored copy survives, and the banner says so.
+  const [storageUnreadable, setStorageUnreadable] = useState(false);
   const loadedScopeRef = useRef<string | null>(null);
   // True between signing in and deciding whether signed-out work joins this
   // account. The editor holds off creating a blank diagram until it resolves.
@@ -308,7 +311,8 @@ export default function App() {
       // one case where the two might be joined. Resolve it here so the editor
       // waits for that decision instead of creating a blank diagram meanwhile.
       const guestPending =
-        storeScope !== GUEST_SCOPE
+        stored.ok
+        && storeScope !== GUEST_SCOPE
         && stored.graphs.length === 0
         && stored.projects.length === 0
         && await scopeHasContent(GUEST_SCOPE);
@@ -343,7 +347,16 @@ export default function App() {
       // the canvas.
       historyIndexRef.current = 0;
       setHistoryIndex(0);
-      setLoadedScope(storeScope);
+      // Only a namespace we actually read counts as loaded. The save effects
+      // below key off `loadedScope`, so leaving it unset after a failed read is
+      // what stops an empty library being written over the stored one.
+      if (stored.ok) {
+        setLoadedScope(storeScope);
+        setStorageUnreadable(false);
+      } else {
+        console.error(`Could not read local storage for ${storeScope}; not saving over it.`);
+        setStorageUnreadable(true);
+      }
       setHasInitialized(true);
     })();
     return () => { cancelled = true; };
@@ -1395,6 +1408,15 @@ export default function App() {
   // Editor View
   return (
     <>
+      {storageUnreadable && (
+        <div
+          role="alert"
+          className="fixed inset-x-0 top-0 z-[100] bg-red-600 px-4 py-2 text-center text-sm font-medium text-white"
+        >
+          Your saved diagrams could not be read from this browser. Saving is turned off so nothing is overwritten. Reload the page to try again.
+        </div>
+      )}
+
       {/* Modals */}
       <PromptModal
         isOpen={promptModal.visible}
