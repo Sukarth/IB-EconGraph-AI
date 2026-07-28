@@ -142,24 +142,50 @@ const SharedViewPage: React.FC<SharedViewPageProps> = ({ slug, onGoHome }) => {
                             </aside>
                         )}
 
-                        <div className="flex-1 p-4 md:p-8 flex flex-col items-center justify-center overflow-auto">
-                            {active ? (
-                                <div className="w-full max-w-4xl">
-                                    <DiagramRenderer
-                                        data={active.diagramData}
-                                        readOnly
-                                        width={800}
-                                        height={550}
-                                        settings={{ ...DEFAULT_EDITOR_SETTINGS, showGrid: false }}
-                                        className="w-full shadow-xl bg-white rounded-xl"
-                                    />
-                                    {active.caption && (
-                                        <p className="text-center text-sm text-gray-500 mt-4">{active.caption}</p>
-                                    )}
+                        <div className="flex-1 flex flex-col overflow-auto min-w-0">
+                            {payload.kind === 'project' && graphs.length > 1 && (
+                                // Phone fallback for the sidebar above, which is
+                                // hidden below `sm`. Without it, a shared project
+                                // only ever showed its first graph on a phone.
+                                <div className="sm:hidden shrink-0 border-b border-gray-200 bg-white px-3 py-2 overflow-x-auto">
+                                    <div className="flex gap-2 w-max">
+                                        {graphs.map((g, i) => (
+                                            <button
+                                                key={g.id}
+                                                onClick={() => setActiveIndex(i)}
+                                                aria-current={i === activeIndex}
+                                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-colors ${i === activeIndex
+                                                    ? 'bg-blue-50 text-blue-700 font-medium'
+                                                    : 'bg-gray-100 text-gray-700'
+                                                    }`}
+                                            >
+                                                <BarChart2 className={`w-3.5 h-3.5 shrink-0 ${i === activeIndex ? 'text-blue-600' : 'text-gray-500'}`} />
+                                                {g.title || 'Untitled'}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
-                            ) : (
-                                <p className="text-sm text-gray-400">This project has no graphs yet.</p>
                             )}
+
+                            <div className="flex-1 p-4 md:p-8 flex flex-col items-center justify-center">
+                                {active ? (
+                                    <div className="w-full max-w-4xl">
+                                        <DiagramRenderer
+                                            data={active.diagramData}
+                                            readOnly
+                                            width={800}
+                                            height={550}
+                                            settings={{ ...DEFAULT_EDITOR_SETTINGS, showGrid: false }}
+                                            className="w-full shadow-xl bg-white rounded-xl"
+                                        />
+                                        {active.caption && (
+                                            <p className="text-center text-sm text-gray-500 mt-4">{active.caption}</p>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <p className="text-sm text-gray-500">This project has no graphs yet.</p>
+                                )}
+                            </div>
                         </div>
                     </>
                 )}

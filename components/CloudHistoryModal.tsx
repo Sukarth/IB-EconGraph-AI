@@ -30,15 +30,25 @@ export const CloudHistoryModal: React.FC<CloudHistoryModalProps> = ({ isOpen, on
     const [versions, setVersions] = useState<CloudVersion[]>([]);
     const [loading, setLoading] = useState(false);
 
+    // Keyed on the ids, not the objects: `activeGraph` in App.tsx is a useMemo
+    // over `graphs` and the Supabase User is replaced on every token refresh,
+    // so with the objects in the deps this re-queried the version list while the
+    // user was simply editing the diagram with the modal open.
+    const graphId = graph?.id ?? null;
+    const userId = user?.id ?? null;
     useEffect(() => {
-        if (!isOpen || !graph || !user || !isPro) return;
+        // Clear first: otherwise the previous graph's snapshots stay listed
+        // until the new query resolves, and restoring one would write another
+        // diagram's content into this graph.
+        setVersions([]);
+        if (!isOpen || !graphId || !userId || !isPro) return;
         let cancelled = false;
         setLoading(true);
-        fetchGraphVersions(graph.id)
+        fetchGraphVersions(graphId)
             .then((v) => { if (!cancelled) setVersions(v); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [isOpen, graph, user, isPro]);
+    }, [isOpen, graphId, userId, isPro]);
 
     const handleRestore = (version: CloudVersion) => {
         const data = version.data as Graph | null;

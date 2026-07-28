@@ -887,6 +887,16 @@ export default function App() {
     [graphs, activeGraphId]
   );
 
+  /**
+   * A share stores a snapshot of `graph.diagramData`, but that field trails the
+   * canvas by the autosave debounce. Creating a link straight after an edit
+   * would publish the pre-edit diagram, so hand the share the live canvas.
+   */
+  const shareGraph = useMemo(
+    () => (activeGraph ? { ...activeGraph, diagramData: currentDiagram, title: currentDiagram.title } : null),
+    [activeGraph, currentDiagram]
+  );
+
   // Latest graphs, readable from async callbacks that would otherwise close
   // over the snapshot taken before an `await` (e.g. a rename the user makes
   // while a generation is still in flight).
@@ -1403,7 +1413,7 @@ export default function App() {
       <ShareModal
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
-        graph={activeGraph}
+        graph={shareGraph}
         onOpenSettings={() => navigateToView('settings')}
         onOpenPricing={() => navigateToView('pricing')}
       />

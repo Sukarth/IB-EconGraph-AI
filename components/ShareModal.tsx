@@ -30,17 +30,28 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, graph, 
     const [copied, setCopied] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    // Keyed on graph.id, not the graph object: `activeGraph` in App.tsx is a
+    // useMemo over `graphs`, so its identity changes on every autosave. With the
+    // object in the deps, simply editing the diagram with this modal open
+    // re-issued the lookup query on each keystroke-debounce.
+    // (Same for user: the Supabase User object is replaced on every token
+    // refresh, which would re-run this for no reason.)
+    const graphId = graph?.id ?? null;
+    const userId = user?.id ?? null;
     useEffect(() => {
-        if (!isOpen || !graph || !user || !isPro) return;
+        // Drop any link belonging to a previously inspected graph, so a stale
+        // URL can never be shown for the current one.
+        setShareId(null);
+        if (!isOpen || !graphId || !userId || !isPro) return;
         let cancelled = false;
         setLoading(true);
         setError(null);
         setCopied(false);
-        getShareIdForGraph(graph.id)
+        getShareIdForGraph(graphId)
             .then((id) => { if (!cancelled) setShareId(id); })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
-    }, [isOpen, graph, user, isPro]);
+    }, [isOpen, graphId, userId, isPro]);
 
     const handleCreate = useCallback(async () => {
         if (!graph || !user || creating) return;
