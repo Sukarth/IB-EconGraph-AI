@@ -84,6 +84,13 @@ export interface Conversation {
 export interface Graph {
   id: string;
   title: string;
+  /**
+   * Set once the user names the graph themselves (rename dialog, or editing the
+   * title on the canvas). While it is unset the AI is free to retitle the graph
+   * on each generation. Absent on graphs saved before this flag existed, which
+   * fall back to a title-based heuristic.
+   */
+  titleSetByUser?: boolean;
   caption: string; // User-editable figure caption
   projectId?: string; // Optional: which project this graph belongs to
   messages: Message[];

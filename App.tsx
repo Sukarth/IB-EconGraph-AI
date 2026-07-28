@@ -187,7 +187,6 @@ export default function App() {
   const storeScope = authLoading ? null : (user?.id ?? GUEST_SCOPE);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
   const loadedScopeRef = useRef<string | null>(null);
-  loadedScopeRef.current = loadedScope;
   // True between signing in and deciding whether signed-out work joins this
   // account. The editor holds off creating a blank diagram until it resolves.
   const [pendingGuestAdoption, setPendingGuestAdoption] = useState(false);
@@ -389,8 +388,13 @@ export default function App() {
   }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, firstPullFailed, graphs.length, projects.length]);
 
   // Keep live refs in sync for dep-free callbacks (see applyRemote).
+  // Synced in effects rather than assigned during render: React may discard a
+  // render pass, and a ref written in the body would keep the value from that
+  // abandoned pass. Every reader below runs in an async callback after commit,
+  // so a one-commit lag is not observable.
   useEffect(() => { activeGraphIdRef.current = activeGraphId; }, [activeGraphId]);
   useEffect(() => { currentDiagramRef.current = currentDiagram; }, [currentDiagram]);
+  useEffect(() => { loadedScopeRef.current = loadedScope; }, [loadedScope]);
 
   // --- Auto-open most recent graph logic ---
   useEffect(() => {
@@ -422,6 +426,7 @@ export default function App() {
       const newGraph: Graph = {
         id: generateId(),
         title: EMPTY_DIAGRAM.title,
+        titleSetByUser: false,
         caption: EMPTY_DIAGRAM.caption || 'Figure 1: Economic Diagram',
         messages: [],
         diagramData: { ...EMPTY_DIAGRAM },
@@ -569,7 +574,14 @@ export default function App() {
     historyDebounceRef.current = window.setTimeout(() => pushToHistory(data), 250);
   }, [pushToHistory]);
 
-  const scheduleAutosave = useCallback((data: DiagramData) => {
+  /**
+   * `fromCanvasEdit` distinguishes a direct edit on the canvas from the other
+   * callers (undo/redo, clear, restoring an older version or a chat message).
+   * Only a direct edit can mean the user retitled the graph; the rest replay a
+   * title that was already chosen for them, and treating those as a rename
+   * would freeze the title against future AI generations.
+   */
+  const scheduleAutosave = useCallback((data: DiagramData, fromCanvasEdit = false) => {
     if (!activeGraphId) return;
     if (autosaveDebounceRef.current) window.clearTimeout(autosaveDebounceRef.current);
     autosaveDebounceRef.current = window.setTimeout(() => {
@@ -580,7 +592,16 @@ export default function App() {
       autosaveDebounceRef.current = null;
       setGraphs(prev => prev.map(g =>
         g.id === activeGraphId
-          ? { ...g, diagramData: data, title: data.title, lastModified: Date.now() }
+          ? {
+            ...g,
+            diagramData: data,
+            title: data.title,
+            // Editing the title directly on the canvas counts as naming it.
+            // Only a real change flips this; ordinary canvas edits carry the
+            // existing title through unchanged.
+            titleSetByUser: g.titleSetByUser || (fromCanvasEdit && data.title !== g.title),
+            lastModified: Date.now(),
+          }
           : g
       ));
     }, 200);
@@ -589,7 +610,7 @@ export default function App() {
   const handleDataChange = useCallback((newData: DiagramData) => {
     setCurrentDiagram(newData);
     scheduleHistoryPush(newData);
-    scheduleAutosave(newData);
+    scheduleAutosave(newData, true);
   }, [scheduleHistoryPush, scheduleAutosave]);
 
   const undo = useCallback(() => {
@@ -660,6 +681,7 @@ export default function App() {
     const newGraph: Graph = {
       id: generateId(),
       title: EMPTY_DIAGRAM.title,
+      titleSetByUser: false,
       caption: EMPTY_DIAGRAM.caption || 'Figure 1: Economic Diagram',
       projectId,
       messages: [],
@@ -792,6 +814,7 @@ export default function App() {
             g.id === graphId ? {
               ...g,
               title: newName.trim(),
+              titleSetByUser: true,
               diagramData: { ...g.diagramData, title: newName.trim() },
               lastModified: Date.now()
             } : g
@@ -816,8 +839,24 @@ export default function App() {
     const importedProjectIds = new Set(data.projects.map(p => p.id));
     recordTombstones('graphs', graphs.filter(g => !importedGraphIds.has(g.id)).map(g => g.id));
     recordTombstones('projects', projects.filter(p => !importedProjectIds.has(p.id)).map(p => p.id));
+
+    // Cloud rows that live only on another device were never in local `graphs`,
+    // so the filter above can't tombstone them, without this, the next sync
+    // pulls them back and the "replace everything" restore silently resurrects
+    // diagrams the backup was meant to drop. Best-effort: null when offline.
+    //
+    // This has to finish BEFORE the imported state is published: publishing
+    // schedules a sync, and a sync that runs while these tombstones are still
+    // missing merges the remote-only rows straight back in.
+    const cloud = await fetchCloudIds();
+    if (cloud) {
+      recordTombstones('graphs', cloud.graphIds.filter(id => !importedGraphIds.has(id)));
+      recordTombstones('projects', cloud.projectIds.filter(id => !importedProjectIds.has(id)));
+    }
+
     // Restored items must win last-write-wins against any wiped/tombstoned
     // remote rows, and must not collide with a stale tombstone of the same id.
+    // Stamped after the await so they are newer than every tombstone above.
     const now = Date.now();
     clearTombstones('graphs', data.graphs.map(g => g.id));
     clearTombstones('projects', data.projects.map(p => p.id));
@@ -831,15 +870,6 @@ export default function App() {
     }
     // Reset active graph since the data has changed
     setActiveGraphId(null);
-    // Cloud rows that live only on another device were never in local `graphs`,
-    // so the filter above can't tombstone them, without this, the next sync
-    // pulls them back and the "replace everything" restore silently resurrects
-    // diagrams the backup was meant to drop. Best-effort: null when offline.
-    const cloud = await fetchCloudIds();
-    if (cloud) {
-      recordTombstones('graphs', cloud.graphIds.filter(id => !importedGraphIds.has(id)));
-      recordTombstones('projects', cloud.projectIds.filter(id => !importedProjectIds.has(id)));
-    }
   }, [graphs, projects]);
 
   const startFromHome = useCallback((projectId?: string) => {
@@ -861,7 +891,7 @@ export default function App() {
   // over the snapshot taken before an `await` (e.g. a rename the user makes
   // while a generation is still in flight).
   const graphsRef = useRef(graphs);
-  graphsRef.current = graphs;
+  useEffect(() => { graphsRef.current = graphs; }, [graphs]);
 
   const projectGraphs = useMemo(() => {
     if (!activeGraph) return [];
@@ -947,15 +977,20 @@ export default function App() {
       const history = activeGraph?.messages.map(m => `${m.role}: ${m.content}`) || [];
       const result = await generateDiagramData(promptText, history);
 
-      // Only let the AI name the graph while it still has the default title.
-      // Once the user has renamed it, that name is theirs and a later
-      // generation must not silently overwrite it. Read the title as it is
-      // *now*, not as it was when the request was sent, so a rename made while
-      // this was generating still wins.
+      // Once the user has named the graph, that name is theirs and a later
+      // generation must not silently overwrite it. This keys off an explicit
+      // flag rather than the title itself: inferring it from "title differs
+      // from the default" locked the graph to whatever the *first* generation
+      // called it, because that generation writes its title back below.
+      // Read the graph as it is *now*, not as it was when the request was sent,
+      // so a rename made while this was generating still wins.
       const liveGraph = graphsRef.current.find(g => g.id === activeGraphId) || null;
-      const userNamed = !!liveGraph
-        && liveGraph.title.trim() !== ''
-        && liveGraph.title !== EMPTY_DIAGRAM.title;
+      const userNamed = !!liveGraph && (
+        liveGraph.titleSetByUser
+        // Graphs saved before the flag existed: fall back to the old heuristic
+        // so an existing hand-picked title is never overwritten.
+        ?? (liveGraph.title.trim() !== '' && liveGraph.title !== EMPTY_DIAGRAM.title)
+      );
       const nextDiagram = userNamed ? { ...result, title: liveGraph!.title } : result;
 
       const aiMsg: Message = {

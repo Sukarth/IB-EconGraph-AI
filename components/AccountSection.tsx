@@ -50,10 +50,12 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
     const [supporterName, setSupporterName] = useState('');
     const [showInSupporters, setShowInSupporters] = useState(false);
     const [supporterSaved, setSupporterSaved] = useState(false);
+    const [supporterBusy, setSupporterBusy] = useState(false);
     const [checkoutPending, setCheckoutPending] = useState(false);
     const [checkoutSuccess, setCheckoutSuccess] = useState(false);
     const [checkoutDelayed, setCheckoutDelayed] = useState(false);
     const pollRef = useRef<number | null>(null);
+    const pollAttemptsRef = useRef(0);
 
     // Load profile-backed form state
     useEffect(() => {
@@ -78,6 +80,7 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         if (params.get('checkout') !== 'success') return;
+        pollAttemptsRef.current = 0;
         setCheckoutPending(true);
         // Clean the URL so refreshes don't re-trigger
         window.history.replaceState({}, '', window.location.pathname);
@@ -91,11 +94,14 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
             setCheckoutSuccess(true);
             return;
         }
-        let attempts = 0;
+        // The count lives in a ref, not a local: this effect depends on
+        // refreshProfile, so anything that re-creates that callback restarts the
+        // effect. With a local counter the restart would reset the tally and the
+        // "taking longer" fallback could never be reached.
         pollRef.current = window.setInterval(() => {
-            attempts += 1;
+            pollAttemptsRef.current += 1;
             refreshProfile();
-            if (attempts > 20) {
+            if (pollAttemptsRef.current > 20) {
                 // ~60s with no webhook yet, surface an explicit "taking longer"
                 // state (with a manual Check button) instead of a stuck spinner.
                 setCheckoutDelayed(true);
@@ -160,15 +166,25 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
     }, [signOut]);
 
     const handleSaveSupporter = useCallback(async () => {
-        const result = await updateProfile({
-            supporter_name: supporterName.trim() || null,
-            show_in_supporters: showInSupporters,
-        });
-        if (!result.error) {
-            setSupporterSaved(true);
-            setTimeout(() => setSupporterSaved(false), 2000);
+        // Without this guard, clicking Save twice in quick succession fires two
+        // overlapping updates and whichever reply lands last wins, so the older
+        // value can end up persisted. Same pattern as the password and
+        // account-deletion actions.
+        if (supporterBusy) return;
+        setSupporterBusy(true);
+        try {
+            const result = await updateProfile({
+                supporter_name: supporterName.trim() || null,
+                show_in_supporters: showInSupporters,
+            });
+            if (!result.error) {
+                setSupporterSaved(true);
+                setTimeout(() => setSupporterSaved(false), 2000);
+            }
+        } finally {
+            setSupporterBusy(false);
         }
-    }, [supporterName, showInSupporters, updateProfile]);
+    }, [supporterBusy, supporterName, showInSupporters, updateProfile]);
 
     if (!configured) return null;
 
@@ -431,9 +447,14 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                                     </label>
                                     <button
                                         onClick={handleSaveSupporter}
-                                        className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 transition-colors"
+                                        disabled={supporterBusy}
+                                        className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
                                     >
-                                        {supporterSaved ? <><Check className="w-3.5 h-3.5" /> Saved</> : 'Save'}
+                                        {supporterBusy
+                                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving</>
+                                            : supporterSaved
+                                                ? <><Check className="w-3.5 h-3.5" /> Saved</>
+                                                : 'Save'}
                                     </button>
                                 </div>
                             </div>

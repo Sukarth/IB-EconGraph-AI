@@ -8,6 +8,13 @@ interface AuthModalProps {
     onClose: () => void;
     title?: string;
     message?: string;
+    /**
+     * In-app path to return to after a redirect-based sign-in (Google OAuth, or
+     * the emailed signup confirmation). Defaults to `/settings`. Callers that
+     * gate an action behind sign-in should pass their own page, otherwise the
+     * user lands somewhere they cannot resume from.
+     */
+    returnTo?: string;
 }
 
 const MIN_PASSWORD = 8;
@@ -24,6 +31,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     onClose,
     title = 'Sign in',
     message,
+    returnTo,
 }) => {
     const { signInWithPassword, signUpWithPassword, resetPassword, signInWithGoogle } = useAuth();
     const [view, setView] = useState<View>('signin');
@@ -64,7 +72,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
         setBusy(true);
         setError(null);
-        const result = await signUpWithPassword(email, password);
+        const result = await signUpWithPassword(email, password, returnTo);
         setBusy(false);
         if (result.error) setError(result.error);
         else if (result.needsConfirmation) setView('confirm-sent');
@@ -84,7 +92,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     const handleGoogle = async () => {
         setError(null);
-        const result = await signInWithGoogle();
+        const result = await signInWithGoogle(returnTo);
         if (result.error) setError(result.error);
     };
 

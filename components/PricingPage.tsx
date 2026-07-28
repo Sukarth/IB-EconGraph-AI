@@ -92,6 +92,9 @@ const PricingPage: React.FC<PricingPageProps> = ({ onOpenEditor, onOpenLanding, 
                 onClose={() => setAuthModalOpen(false)}
                 title="Sign in to continue"
                 message="Create a free account first (it takes a few seconds). Once you're signed in, click Become a Supporter again to go to checkout."
+                // Come back here, not to Settings: the message above tells them
+                // to click Become a Supporter again, which only exists on this page.
+                returnTo="/pricing"
             />
 
             {/* Nav */}

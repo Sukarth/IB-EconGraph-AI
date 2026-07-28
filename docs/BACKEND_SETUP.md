@@ -33,11 +33,14 @@ from the UI — a fork with zero configuration still works perfectly.
    HaveIBeenPwned) — this clears the `auth_leaked_password_protection` linter warning.
 4. **Auth → URL Configuration**:
    - **Site URL** → your deployment (e.g. `https://ib-econgraph-ai.vercel.app`).
-   - **Redirect URLs** → add every origin you sign in from, so confirmation and
-     password-reset links return to `/settings`. Include your prod domain plus,
+   - **Redirect URLs** → add every origin you sign in from, so confirmation,
+     password-reset and Google OAuth links return to the right page. Use a
+     path wildcard (`https://your-domain/**`): sign-in returns to `/settings`
+     normally, but to `/pricing` when it was triggered from the checkout gate,
+     so a `/settings`-only entry is not enough. Include your prod domain plus,
      for local testing, `http://localhost:4000/**` and your dev-tunnel
      `https://<id>.devtunnels.ms/**`. If an origin isn't listed, Supabase falls
-     back to the Site URL and the link won't land on Settings.
+     back to the Site URL and the link won't land where it should.
 5. **Auth > Emails / SMTP.** Supabase's built-in mailer is capped at **2 emails
    per hour** and is explicitly **not for production**. Verification and
    password-reset emails go to real users, so you need a sender their inboxes will

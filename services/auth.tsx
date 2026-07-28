@@ -34,15 +34,17 @@ interface AuthContextValue {
      */
     recoveryMode: boolean;
     /** Create an account with email + password. `needsConfirmation` when a
-     * verification email was sent and no session was established yet. */
-    signUpWithPassword: (email: string, password: string) => Promise<{ error?: string; needsConfirmation?: boolean }>;
+     * verification email was sent and no session was established yet.
+     * `returnTo` is the in-app path to land on afterwards (default `/settings`). */
+    signUpWithPassword: (email: string, password: string, returnTo?: string) => Promise<{ error?: string; needsConfirmation?: boolean }>;
     signInWithPassword: (email: string, password: string) => Promise<{ error?: string }>;
     /** Send a password-reset email. */
     resetPassword: (email: string) => Promise<{ error?: string }>;
     /** Set a new password for the signed-in (or recovering) user. */
     updatePassword: (password: string) => Promise<{ error?: string }>;
     clearRecoveryMode: () => void;
-    signInWithGoogle: () => Promise<{ error?: string }>;
+    /** `returnTo` is the in-app path to land on afterwards (default `/settings`). */
+    signInWithGoogle: (returnTo?: string) => Promise<{ error?: string }>;
     signOut: () => Promise<void>;
     refreshProfile: () => Promise<void>;
     updateProfile: (patch: EditableProfileFields) => Promise<{ error?: string }>;
@@ -71,6 +73,21 @@ const AuthContext = createContext<AuthContextValue>({
 
 export function profileIsPro(profile: Profile | null): boolean {
     return isProUntilActive(profile?.pro_until);
+}
+
+/**
+ * Absolute URL for an auth redirect back into the app. Only a same-origin path
+ * is accepted: anything else (a full URL, a protocol-relative `//host` that the
+ * browser would treat as another origin, a backslash variant some parsers
+ * normalise to `/`) falls back to Settings, so a redirect target can never be
+ * pointed off-site.
+ */
+function authRedirectUrl(returnTo?: string): string {
+    const safe =
+        returnTo && /^\/[A-Za-z0-9._~\-/]*$/.test(returnTo) && !returnTo.startsWith('//')
+            ? returnTo
+            : '/settings';
+    return `${window.location.origin}${safe}`;
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -135,12 +152,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
     }, [fetchProfile]);
 
-    const signUpWithPassword = useCallback(async (email: string, password: string) => {
+    const signUpWithPassword = useCallback(async (email: string, password: string, returnTo?: string) => {
         if (!supabase) return NOT_CONFIGURED;
         const { data, error } = await supabase.auth.signUp({
             email: email.trim(),
             password,
-            options: { emailRedirectTo: `${window.location.origin}/settings` },
+            options: { emailRedirectTo: authRedirectUrl(returnTo) },
         });
         if (error) return { error: error.message };
         // Session present → email confirmation is disabled, user is signed in.
@@ -182,11 +199,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const clearRecoveryMode = useCallback(() => setRecoveryMode(false), []);
 
-    const signInWithGoogle = useCallback(async () => {
+    const signInWithGoogle = useCallback(async (returnTo?: string) => {
         if (!supabase) return NOT_CONFIGURED;
         const { error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
-            options: { redirectTo: `${window.location.origin}/settings` },
+            options: { redirectTo: authRedirectUrl(returnTo) },
         });
         return error ? { error: error.message } : {};
     }, []);
