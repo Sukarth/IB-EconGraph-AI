@@ -80,7 +80,13 @@ export const PrivacyPage: React.FC = () => (
                     can access them across devices.</LI>
                 <LI><strong>Hosted AI prompts (Supporter plan).</strong> When you use hosted AI generation, the
                     text prompt you submit is sent to Google's Gemini models to produce a diagram. We meter the
-                    number of generations per month but do not use your prompts to train any model.</LI>
+                    number of generations per month and never use your prompts to train a model. What Google
+                    does with them is governed by its own terms for whichever Google API this deployment is
+                    configured to use: its paid Google Cloud (Vertex AI) endpoints are covered by terms that
+                    exclude training on customer content, while its free developer tier permits Google to review
+                    content and use it to improve its services. If you would rather not rely on that, use your
+                    own API key: those requests go straight from your browser to your provider and never reach
+                    us.</LI>
                 <LI><strong>Billing data.</strong> Payments are processed by Polar as merchant of record. We never
                     receive or store your full card details. We store a Polar customer/subscription identifier and
                     your subscription status so we can grant Supporter access.</LI>
