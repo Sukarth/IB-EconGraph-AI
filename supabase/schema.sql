@@ -48,6 +48,15 @@ create table if not exists public.profiles (
 
 -- Added after the initial release; `create table if not exists` above skips
 -- existing installs, so bring them forward explicitly.
+--
+-- Deliberately left NULL for rows that already exist. NULL means "no ordering
+-- baseline yet", so the first event for an existing subscriber is applied
+-- unordered, and a stale one delivered in that window could extend access it
+-- should not have. Seeding now() instead would reject every event stamped
+-- before the migration, including a legitimate renewal that was merely slow to
+-- arrive. Over-granting one event of access to an existing subscriber is
+-- recoverable; cutting off someone who paid is not, and there is no value we
+-- could seed that reconstructs the real last-applied time.
 alter table public.profiles add column if not exists polar_event_at timestamptz;
 
 alter table public.profiles enable row level security;

@@ -263,6 +263,11 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
                                         className="group flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 border border-transparent hover:border-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 transition-all cursor-pointer"
                                         onClick={() => addCustomTemplate(t)}
                                         onKeyDown={(e) => {
+                                            // Only keys pressed on the row itself. The nested
+                                            // delete button stops click propagation but keydown
+                                            // still bubbles, so without this, deleting from the
+                                            // keyboard also added the template.
+                                            if (e.target !== e.currentTarget) return;
                                             if (e.key === 'Enter' || e.key === ' ') {
                                                 e.preventDefault(); // Space would scroll the panel
                                                 addCustomTemplate(t);
