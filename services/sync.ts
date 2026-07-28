@@ -37,12 +37,66 @@ function saveVersionHashes(map: Record<string, string>): void {
     } catch { /* quota — best-effort */ }
 }
 
+// Graphs whose snapshot insert failed, and shares whose refresh failed. Both
+// are best-effort steps that run only for rows touched by the current sync, so
+// without a record of the failure a later sync that happens to touch nothing
+// would never retry them and the work would be lost for good.
+const PENDING_VERSIONS_KEY = 'econgraph_pending_versions_v1';
+const PENDING_SHARES_KEY = 'econgraph_pending_share_refresh_v1';
+
+function loadPendingVersionIds(): Set<string> {
+    try {
+        const raw = localStorage.getItem(PENDING_VERSIONS_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) return new Set(parsed.filter((v) => typeof v === 'string'));
+        }
+    } catch { /* corrupted — start fresh */ }
+    return new Set();
+}
+
+function savePendingVersionIds(ids: Set<string>): void {
+    try {
+        if (ids.size === 0) localStorage.removeItem(PENDING_VERSIONS_KEY);
+        else localStorage.setItem(PENDING_VERSIONS_KEY, JSON.stringify([...ids]));
+    } catch { /* quota — best-effort */ }
+}
+
+function sharesRefreshPending(): boolean {
+    try {
+        return localStorage.getItem(PENDING_SHARES_KEY) === '1';
+    } catch {
+        return false;
+    }
+}
+
+function setSharesRefreshPending(pending: boolean): void {
+    try {
+        if (pending) localStorage.setItem(PENDING_SHARES_KEY, '1');
+        else localStorage.removeItem(PENDING_SHARES_KEY);
+    } catch { /* quota — best-effort */ }
+}
+
 /** Small, fast, non-cryptographic content hash (djb2). Collisions only cost a
  *  skipped snapshot, so a cheap hash is fine here. */
 function contentHash(s: string): string {
     let h = 5381;
     for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
     return h.toString(36);
+}
+
+/**
+ * Fingerprint of the parts a version snapshot exists to preserve. Hashing the
+ * whole `Graph` defeated the dedup entirely: it includes `lastModified`, which
+ * every autosave rewrites, so no push ever compared equal and a duplicate
+ * snapshot was written on each sync.
+ */
+function versionFingerprint(g: Graph): string {
+    return contentHash(JSON.stringify({
+        diagramData: g.diagramData,
+        title: g.title,
+        caption: g.caption,
+    }));
 }
 
 interface TombstoneStore {
@@ -334,6 +388,15 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
             projectRows.push(projectToRow(local, userId));
         }
     }
+    // A tombstone for an id that is alive locally is stale: the row came back
+    // after the delete was recorded (pulled from another device, restored from
+    // a backup, resurrected above). Left in place it never expires, and if the
+    // timestamps line up the catch-all below queues a tombstone for an id this
+    // same batch is upserting as alive — which Postgres rejects with "ON
+    // CONFLICT DO UPDATE command cannot affect row a second time", failing the
+    // whole sync.
+    for (const id of finalProjects.keys()) delete tombs.projects[id];
+
     // Tombstones for local deletions the server hasn't heard about yet.
     for (const [id, ts] of Object.entries(tombs.projects)) {
         if (projectTombIds.has(id)) continue; // already queued above
@@ -402,6 +465,9 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
             graphRows.push(graphToRow(local, userId));
         }
     }
+    // Same stale-tombstone sweep as for projects above.
+    for (const id of finalGraphs.keys()) delete tombs.graphs[id];
+
     for (const [id, ts] of Object.entries(tombs.graphs)) {
         if (graphTombIds.has(id)) continue; // already queued above
         const remote = remoteGraphMap.get(id);
@@ -428,14 +494,27 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
     saveTombstones(tombs);
 
     // ── Version snapshots for pushed (alive) graphs ──
-    if (graphRows.length > 0) {
+    // Retries first: a graph whose snapshot insert failed on an earlier sync is
+    // not necessarily pushed again (it needs no further edits), so without this
+    // its revision would be lost permanently.
+    const pendingVersionIds = loadPendingVersionIds();
+    const versionCandidates = [...graphRows];
+    const queuedIds = new Set(graphRows.map((r) => r.id));
+    for (const id of pendingVersionIds) {
+        if (queuedIds.has(id)) continue;
+        const graph = finalGraphs.get(id);
+        if (graph) versionCandidates.push(graphToRow(graph, userId));
+        else pendingVersionIds.delete(id); // graph is gone; nothing to snapshot
+    }
+
+    if (versionCandidates.length > 0) {
         // Only snapshot graphs whose content actually changed since their last
         // version — skip pushes that merely bumped last_modified, so identical
         // snapshots don't pile up in the free-tier DB.
         const hashes = loadVersionHashes();
-        const changedRows = graphRows.filter((row) => {
-            const h = contentHash(JSON.stringify(row.data));
-            if (hashes[row.id] === h) return false;
+        const changedRows = versionCandidates.filter((row) => {
+            const h = versionFingerprint(row.data as Graph);
+            if (hashes[row.id] === h && !pendingVersionIds.has(row.id)) return false;
             hashes[row.id] = h;
             return true;
         });
@@ -448,7 +527,11 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
                 last_modified: row.last_modified,
             }));
             const { error } = await supabase.from('graph_versions').insert(versionRows as never[]);
-            if (!error) {
+            if (error) {
+                // Queue for the next sync rather than dropping the revision.
+                for (const row of changedRows) pendingVersionIds.add(row.id);
+            } else {
+                for (const row of changedRows) pendingVersionIds.delete(row.id);
                 saveVersionHashes(hashes);
                 // Independent per-graph prunes — run them concurrently instead of a
                 // serial round-trip each, which stalls the debounced sync path.
@@ -460,9 +543,18 @@ export async function syncCloud(userId: string, localGraphsIn: Graph[], localPro
             }
         }
     }
+    savePendingVersionIds(pendingVersionIds);
 
     // ── Keep share links fresh, drop shares of deleted content ──
-    await refreshShares(userId, finalGraphs, finalProjects, graphRows, graphTombRows.map((r) => r.id), projectTombRows.map((r) => r.id));
+    await refreshShares(
+        userId,
+        finalGraphs,
+        finalProjects,
+        graphRows,
+        projectRows,
+        graphTombRows.map((r) => r.id),
+        projectTombRows.map((r) => r.id),
+    );
 
     return {
         graphs: Array.from(finalGraphs.values()),
@@ -478,18 +570,29 @@ async function refreshShares(
     finalGraphs: Map<string, Graph>,
     finalProjects: Map<string, Project>,
     pushedGraphRows: RemoteGraphRow[],
+    pushedProjectRows: RemoteProjectRow[],
     deletedGraphIds: string[],
     deletedProjectIds: string[],
 ): Promise<void> {
     if (!supabase) return;
+    // A previous run failed partway. Its shares were never refreshed and the
+    // rows behind them may not change again, so this run refreshes everything
+    // rather than only what it happened to touch.
+    const retryAll = sharesRefreshPending();
+    let failed = false;
     try {
-        const { data: shares } = await supabase
+        const { data: shares, error } = await supabase
             .from('shares')
             .select('id, kind, graph_id, project_id')
             .eq('user_id', userId);
-        if (!shares || shares.length === 0) return;
+        if (error) throw new Error(error.message);
+        if (!shares || shares.length === 0) {
+            setSharesRefreshPending(false);
+            return;
+        }
 
         const pushedIds = new Set(pushedGraphRows.map((r) => r.id));
+        const pushedProjectIds = new Set(pushedProjectRows.map((r) => r.id));
         const allGraphs = Array.from(finalGraphs.values());
 
         // Each share touches a different row, so refresh them concurrently
@@ -497,16 +600,19 @@ async function refreshShares(
         await Promise.all(shares.map(async (share) => {
             if (share.kind === 'graph' && share.graph_id) {
                 if (deletedGraphIds.includes(share.graph_id) || !finalGraphs.has(share.graph_id)) {
-                    await supabase!.from('shares').delete().eq('id', share.id);
-                } else if (pushedIds.has(share.graph_id)) {
+                    const { error: delErr } = await supabase!.from('shares').delete().eq('id', share.id);
+                    if (delErr) failed = true;
+                } else if (retryAll || pushedIds.has(share.graph_id)) {
                     const graph = finalGraphs.get(share.graph_id)!;
-                    await supabase!.from('shares')
+                    const { error: upErr } = await supabase!.from('shares')
                         .update({ payload: graphSharePayload(graph), updated_at: new Date().toISOString() })
                         .eq('id', share.id);
+                    if (upErr) failed = true;
                 }
             } else if (share.kind === 'project' && share.project_id) {
                 if (deletedProjectIds.includes(share.project_id) || !finalProjects.has(share.project_id)) {
-                    await supabase!.from('shares').delete().eq('id', share.id);
+                    const { error: delErr } = await supabase!.from('shares').delete().eq('id', share.id);
+                    if (delErr) failed = true;
                 } else {
                     const project = finalProjects.get(share.project_id)!;
                     const memberPushed = allGraphs.some((g) => g.projectId === project.id && pushedIds.has(g.id));
@@ -515,17 +621,25 @@ async function refreshShares(
                     // would leave it in the publicly served payload. Any deletion this
                     // sync re-renders the payload (which now omits the deleted graphs).
                     const memberDeleted = deletedGraphIds.length > 0;
-                    if (memberPushed || memberDeleted) {
-                        await supabase!.from('shares')
+                    // The project row itself can change without any member changing
+                    // (a rename, a new colour); the payload embeds the project name,
+                    // so that has to re-render too.
+                    const projectPushed = pushedProjectIds.has(project.id);
+                    if (retryAll || memberPushed || memberDeleted || projectPushed) {
+                        const { error: upErr } = await supabase!.from('shares')
                             .update({ payload: projectSharePayload(project, allGraphs), updated_at: new Date().toISOString() })
                             .eq('id', share.id);
+                        if (upErr) failed = true;
                     }
                 }
             }
         }));
     } catch {
-        // Share refresh is best-effort; the next sync retries.
+        failed = true;
     }
+    // Sticky until a run completes cleanly, so a transient failure cannot leave
+    // a public link showing stale content forever.
+    setSharesRefreshPending(failed);
 }
 
 function friendlySyncError(message: string): string {

@@ -491,6 +491,48 @@ create trigger projects_purge_shares_on_delete
   for each row execute function public.purge_shares_for_deleted_content();
 
 -- ----------------------------------------------------------------------------
+-- Last-write-wins, enforced by the database
+-- ----------------------------------------------------------------------------
+-- The client resolves conflicts by reading every remote row, comparing
+-- last_modified, and upserting whatever it decided is newer. That comparison is
+-- only valid at the instant of the read: two devices (or two tabs, or a
+-- debounced sync overlapping a focus sync) both read the same baseline, and the
+-- slower push lands last, overwriting a newer diagram with older content. The
+-- read and the write are not atomic and no amount of client-side care makes
+-- them so.
+--
+-- Doing the comparison inside the write itself closes the window. Returning
+-- null from a BEFORE UPDATE trigger skips that row's update and leaves the
+-- stored row intact, so a stale push is dropped rather than rejected: the
+-- pushing client is not carrying newer data, it just no longer has anything to
+-- contribute, and failing its whole batch would be worse.
+--
+-- Equal timestamps still write, which keeps re-pushing the same row idempotent
+-- and lets a tombstone (whose timestamp is the delete's, and is only ever
+-- queued when it is >= the remote row's) win against the row it deletes.
+create or replace function public.reject_stale_write()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.last_modified < old.last_modified then
+    return null;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists graphs_reject_stale_write on public.graphs;
+create trigger graphs_reject_stale_write
+  before update on public.graphs
+  for each row execute function public.reject_stale_write();
+
+drop trigger if exists projects_reject_stale_write on public.projects;
+create trigger projects_reject_stale_write
+  before update on public.projects
+  for each row execute function public.reject_stale_write();
+
+-- ----------------------------------------------------------------------------
 -- templates — user's custom component templates (synced)
 -- ----------------------------------------------------------------------------
 create table if not exists public.templates (

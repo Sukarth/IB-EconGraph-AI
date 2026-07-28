@@ -93,7 +93,15 @@ export function useCloudSync({ userId, hasInitialized, graphs, projects, applyRe
             runningRef.current = false;
             if (rerunRef.current) {
                 rerunRef.current = false;
-                window.setTimeout(() => { void runSync(); }, 500);
+                // Held in timerRef so unmount and sign-out can cancel it; left
+                // loose, a sync could still fire against a signed-out session.
+                // A later scheduleSync supersedes it, which is correct: that one
+                // runs sooner and reads the same state.
+                if (timerRef.current) window.clearTimeout(timerRef.current);
+                timerRef.current = window.setTimeout(() => {
+                    timerRef.current = null;
+                    void runSync();
+                }, 500);
             }
         }
     }, []);
@@ -112,6 +120,7 @@ export function useCloudSync({ userId, hasInitialized, graphs, projects, applyRe
         if (!userId) {
             setSyncState({ status: 'disabled', lastSyncedAt: null, error: null });
             if (timerRef.current) window.clearTimeout(timerRef.current);
+            timerRef.current = null;
             return;
         }
         setSyncState((s) => (s.status === 'disabled' ? { ...s, status: 'idle' } : s));
@@ -144,6 +153,7 @@ export function useCloudSync({ userId, hasInitialized, graphs, projects, applyRe
     // Cleanup
     useEffect(() => () => {
         if (timerRef.current) window.clearTimeout(timerRef.current);
+        timerRef.current = null;
     }, []);
 
     const syncNow = useCallback(() => {
