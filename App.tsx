@@ -208,7 +208,18 @@ export default function App() {
     const openId = activeGraphIdRef.current;
     if (openId && autosaveDebounceRef.current === null) {
       const incoming = remoteGraphs.find((g) => g.id === openId);
-      if (incoming && JSON.stringify(incoming.diagramData) !== JSON.stringify(currentDiagramRef.current)) {
+      if (!incoming) {
+        // Deleted on another device. The merge already dropped it, so leaving
+        // it open would keep editing (and re-uploading) a graph that no longer
+        // exists. Close it and let the auto-open effect pick the next one.
+        setActiveGraphId(null);
+        const blank = { ...EMPTY_DIAGRAM };
+        setCurrentDiagram(blank);
+        setHistory([blank]);
+        historyRef.current = [blank];
+        historyIndexRef.current = 0;
+        setHistoryIndex(0);
+      } else if (JSON.stringify(incoming.diagramData) !== JSON.stringify(currentDiagramRef.current)) {
         setCurrentDiagram(incoming.diagramData);
         setHistory([incoming.diagramData]);
         historyRef.current = [incoming.diagramData];
@@ -240,6 +251,14 @@ export default function App() {
     cloudConfigured && !!user && isPro &&
     syncState.lastSyncedAt === null &&
     (syncState.status === 'idle' || syncState.status === 'syncing' || syncState.status === 'disabled');
+
+  // The first pull did not just fail to arrive, it failed outright. We cannot
+  // tell whether this account's cloud is empty, so any decision that depends on
+  // "the account has nothing" has to stay unresolved.
+  const firstPullFailed =
+    cloudConfigured && !!user && isPro &&
+    syncState.lastSyncedAt === null &&
+    (syncState.status === 'error' || syncState.status === 'offline');
 
   // --- Load shared editor preferences on mount ---
   // Diagrams and projects are NOT loaded here: they belong to whichever account
@@ -301,6 +320,17 @@ export default function App() {
       setGraphs(stored.graphs);
       setProjects(stored.projects);
       setPendingGuestAdoption(guestPending);
+      // Drop timers armed by the outgoing account. A pending autosave would
+      // write its diagram into this namespace, and a pending history push would
+      // put it in the new account's undo stack.
+      if (historyDebounceRef.current !== null) {
+        window.clearTimeout(historyDebounceRef.current);
+        historyDebounceRef.current = null;
+      }
+      if (autosaveDebounceRef.current !== null) {
+        window.clearTimeout(autosaveDebounceRef.current);
+        autosaveDebounceRef.current = null;
+      }
       // Close whatever was open and blank the canvas: it belongs to the
       // namespace we're leaving. The auto-open effect below picks this
       // account's most recent diagram once its data is in place.
@@ -309,6 +339,10 @@ export default function App() {
       setCurrentDiagram(blank);
       setHistory([blank]);
       historyRef.current = [blank];
+      // undo/redo read the ref, not the state. Leaving it stale lets Ctrl+Z
+      // index past the end of the new one-item history and feed undefined into
+      // the canvas.
+      historyIndexRef.current = 0;
       setHistoryIndex(0);
       setLoadedScope(storeScope);
       setHasInitialized(true);
@@ -329,6 +363,7 @@ export default function App() {
       pending: pendingGuestAdoption,
       scopeReady: loadedScope === storeScope,
       awaitingFirstPull,
+      firstPullFailed,
       accountHasContent: graphs.length > 0 || projects.length > 0,
     });
     if (decision === 'wait') return;
@@ -343,12 +378,15 @@ export default function App() {
     let cancelled = false;
     void (async () => {
       const adopted = await adoptScope(GUEST_SCOPE, storeScope);
-      if (cancelled) return;
+      // null means the copy failed and the work is still in the guest
+      // namespace. Leave this account empty rather than showing diagrams that
+      // were not actually saved to it.
+      if (cancelled || !adopted) return;
       setGraphs(adopted.graphs);
       setProjects(adopted.projects);
     })();
     return () => { cancelled = true; };
-  }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, graphs.length, projects.length]);
+  }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, firstPullFailed, graphs.length, projects.length]);
 
   // Keep live refs in sync for dep-free callbacks (see applyRemote).
   useEffect(() => { activeGraphIdRef.current = activeGraphId; }, [activeGraphId]);
@@ -377,7 +415,9 @@ export default function App() {
       // Likewise, don't create one while work done signed out is about to be
       // handed to this account: that would leave a stray blank diagram beside it
       // (and select it, since the graph below is chosen unconditionally).
-      if (pendingGuestAdoption) return;
+      // A failed pull leaves that decision unresolved indefinitely, so don't
+      // hold the editor hostage to it.
+      if (pendingGuestAdoption && !firstPullFailed) return;
       // Create new graph if none exist
       const newGraph: Graph = {
         id: generateId(),
@@ -400,7 +440,7 @@ export default function App() {
       historyRef.current = [newGraph.diagramData];
       setHistoryIndex(0);
     }
-  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
+  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption, firstPullFailed]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
   // Only write once the namespace in memory is the one we last loaded. During an
@@ -533,6 +573,11 @@ export default function App() {
     if (!activeGraphId) return;
     if (autosaveDebounceRef.current) window.clearTimeout(autosaveDebounceRef.current);
     autosaveDebounceRef.current = window.setTimeout(() => {
+      // Clear the handle first: applyRemote reads this ref to mean "unsaved
+      // edits are in flight, don't overwrite the canvas". Left set, it stays
+      // true forever after the first autosave and cross-device pulls silently
+      // stop refreshing the open diagram.
+      autosaveDebounceRef.current = null;
       setGraphs(prev => prev.map(g =>
         g.id === activeGraphId
           ? { ...g, diagramData: data, title: data.title, lastModified: Date.now() }

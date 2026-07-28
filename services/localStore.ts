@@ -75,13 +75,17 @@ function lsGet(collection: Collection, scope: StoreScope): string | null {
     }
 }
 
-function lsSet(collection: Collection, scope: StoreScope, raw: string | null): void {
+/** Returns whether the write actually landed. Callers that then clear a source
+ *  namespace MUST check this, or a failed write silently destroys the data. */
+function lsSet(collection: Collection, scope: StoreScope, raw: string | null): boolean {
     try {
         const key = localKey(collection, scope);
         if (raw === null) localStorage.removeItem(key);
         else localStorage.setItem(key, raw);
+        return true;
     } catch (e) {
         console.error(`Failed to write ${collection} for scope ${scope}:`, e);
+        return false;
     }
 }
 
@@ -125,17 +129,30 @@ function openDb(): Promise<IDBDatabase | null> {
     });
 }
 
-function idbRequest<T>(db: IDBDatabase, mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest): Promise<T | null> {
+/**
+ * `ok` distinguishes a genuine failure from a successful read that happens to
+ * return nothing. Writes are only safe to act on when `ok` is true: treating a
+ * failed write as success is how a move loses data.
+ */
+interface IdbResult<T> { ok: boolean; value: T | null }
+
+function idbRequest<T>(db: IDBDatabase, mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest): Promise<IdbResult<T>> {
     return new Promise((resolve) => {
         try {
             const tx = db.transaction(DB_STORE, mode);
             const req = run(tx.objectStore(DB_STORE));
-            req.onsuccess = () => resolve(req.result as T);
-            req.onerror = () => resolve(null);
-            tx.onabort = () => resolve(null);
+            // Resolve on transaction completion for writes: a request can
+            // succeed and the transaction still abort (quota, for one).
+            req.onsuccess = () => {
+                if (mode === 'readonly') resolve({ ok: true, value: req.result as T });
+            };
+            tx.oncomplete = () => resolve({ ok: true, value: (req.result ?? null) as T | null });
+            req.onerror = () => resolve({ ok: false, value: null });
+            tx.onabort = () => resolve({ ok: false, value: null });
+            tx.onerror = () => resolve({ ok: false, value: null });
         } catch (e) {
             console.error('IndexedDB operation failed:', e);
-            resolve(null);
+            resolve({ ok: false, value: null });
         }
     });
 }
@@ -184,8 +201,8 @@ function migrateToNamespaces(): void {
             const raw = lsGet(collection, GUEST_SCOPE);
             // Don't clobber an existing namespace if this somehow runs twice.
             if (raw !== null && lsGet(collection, owner) === null) {
-                lsSet(collection, owner, raw);
-                lsSet(collection, GUEST_SCOPE, null);
+                // Only drop the source once the copy is definitely on disk.
+                if (lsSet(collection, owner, raw)) lsSet(collection, GUEST_SCOPE, null);
             }
         }
         try { localStorage.removeItem(LEGACY_OWNER_KEY); } catch { /* ignore */ }
@@ -216,10 +233,13 @@ async function migrateToIndexedDb(database: IDBDatabase): Promise<void> {
             if (raw === null) continue;
 
             const existing = await idbGet<unknown[]>(database, dbKey(collection, scope));
+            if (!existing.ok) continue; // can't tell what's there; leave the source alone
             // Only seed a namespace IndexedDB doesn't already know about, so a
             // partially completed run can be repeated safely.
-            if (!Array.isArray(existing)) {
-                await idbPut(database, dbKey(collection, scope), parseArray(raw));
+            if (!Array.isArray(existing.value)) {
+                const written = await idbPut(database, dbKey(collection, scope), parseArray(raw));
+                // Keep localStorage as the copy of record until the move lands.
+                if (!written.ok) continue;
             }
             try { localStorage.removeItem(key); } catch { /* ignore */ }
         }
@@ -279,32 +299,33 @@ export async function requestPersistentStorage(): Promise<boolean> {
 async function readCollection<T>(collection: Collection, scope: StoreScope): Promise<T[]> {
     await ready();
     if (db) {
-        const value = await idbGet<T[]>(db, dbKey(collection, scope));
-        return Array.isArray(value) ? value : [];
+        const result = await idbGet<T[]>(db, dbKey(collection, scope));
+        return Array.isArray(result.value) ? result.value : [];
     }
     return parseArray<T>(lsGet(collection, scope));
 }
 
 // Serialise writes per key: two rapid saves resolving out of order would
 // otherwise leave the older array on disk.
-const writeQueues = new Map<string, Promise<unknown>>();
+const writeQueues = new Map<string, Promise<boolean>>();
 
-function enqueueWrite(key: string, op: () => Promise<unknown>): Promise<unknown> {
-    const previous = writeQueues.get(key) ?? Promise.resolve();
+function enqueueWrite(key: string, op: () => Promise<boolean>): Promise<boolean> {
+    const previous = writeQueues.get(key) ?? Promise.resolve(true);
     const next = previous.then(op, op).catch((e) => {
         console.error(`Failed to save ${key}:`, e);
+        return false;
     });
     writeQueues.set(key, next);
     return next;
 }
 
-async function writeCollection<T>(collection: Collection, scope: StoreScope, items: T[]): Promise<void> {
+/** Resolves to whether the data is actually stored. */
+async function writeCollection<T>(collection: Collection, scope: StoreScope, items: T[]): Promise<boolean> {
     await ready();
     const key = dbKey(collection, scope);
-    await enqueueWrite(key, async () => {
-        if (db) return idbPut(db, key, items);
-        lsSet(collection, scope, JSON.stringify(items));
-        return undefined;
+    return enqueueWrite(key, async () => {
+        if (db) return (await idbPut(db, key, items)).ok;
+        return lsSet(collection, scope, JSON.stringify(items));
     });
 }
 
@@ -317,11 +338,11 @@ export async function readScope(scope: StoreScope): Promise<{ graphs: Graph[]; p
     return { graphs, projects };
 }
 
-export function writeGraphs(scope: StoreScope, graphs: Graph[]): Promise<void> {
+export function writeGraphs(scope: StoreScope, graphs: Graph[]): Promise<boolean> {
     return writeCollection('graphs', scope, graphs);
 }
 
-export function writeProjects(scope: StoreScope, projects: Project[]): Promise<void> {
+export function writeProjects(scope: StoreScope, projects: Project[]): Promise<boolean> {
     return writeCollection('projects', scope, projects);
 }
 
@@ -351,11 +372,19 @@ export function decideGuestAdoption(input: {
     scopeReady: boolean;
     /** A Supporter whose first cloud pull hasn't landed yet. */
     awaitingFirstPull: boolean;
+    /**
+     * A Supporter whose first pull failed (error/offline). An empty account is
+     * then unproven: the cloud may well hold diagrams we simply couldn't read.
+     */
+    firstPullFailed: boolean;
     /** Whether the account has any diagrams or projects right now. */
     accountHasContent: boolean;
 }): AdoptionDecision {
     if (!input.pending || !input.scopeReady) return 'wait';
     if (input.awaitingFirstPull) return 'wait';
+    // Never treat "we couldn't reach the cloud" as "the account is empty":
+    // adopting on that basis mixes signed-out work into someone's real library.
+    if (input.firstPullFailed) return 'wait';
     return input.accountHasContent ? 'keep-separate' : 'adopt';
 }
 
@@ -366,10 +395,22 @@ export function decideGuestAdoption(input: {
  * The caller must have established that the destination is empty: this
  * overwrites rather than merges, precisely so two people's diagrams are never
  * silently mixed together.
+ *
+ * Returns null if the copy did not land, leaving the source untouched. Clearing
+ * the source on a failed write would destroy the only copy, which is the whole
+ * thing this namespacing exists to prevent.
  */
-export async function adoptScope(from: StoreScope, to: StoreScope): Promise<{ graphs: Graph[]; projects: Project[] }> {
+export async function adoptScope(from: StoreScope, to: StoreScope): Promise<{ graphs: Graph[]; projects: Project[] } | null> {
     const moved = await readScope(from);
-    await Promise.all([writeGraphs(to, moved.graphs), writeProjects(to, moved.projects)]);
+    const [graphsSaved, projectsSaved] = await Promise.all([
+        writeGraphs(to, moved.graphs),
+        writeProjects(to, moved.projects),
+    ]);
+    if (!graphsSaved || !projectsSaved) {
+        console.error(`Could not move ${from} into ${to}; leaving the source in place.`);
+        return null;
+    }
+
     await Promise.all([writeGraphs(from, []), writeProjects(from, [])]);
     if (db) {
         // Leave no empty records behind for a namespace nobody is using.
