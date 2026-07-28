@@ -107,11 +107,14 @@ export const DIAGRAM_PAGES = [
         axes: ['Quantity (Q)', 'Price, Costs (P)'],
         diagram: {
             lines: [
+                // D = AR is P = 100 - Q, so MR = 100 - 2Q: same price intercept,
+                // twice the slope. Drawn from Q=10 (MR=80) to where MR hits 10.
                 [10, 90, 90, 10, '#ef4444', 'D=AR'],
-                [10, 90, 55, 10, '#ec4899', 'MR', true],
+                [10, 80, 45, 10, '#ec4899', 'MR', true],
                 [10, 15, 85, 88, '#3b82f6', 'MC'],
             ],
-            points: [[35, 44, 'MC=MR'], [35, 68, 'P_m']],
+            // MC = MR at Q = 31.9; P_m is read off demand at that quantity.
+            points: [[31.9, 36.3, 'MC=MR'], [31.9, 68.1, 'P_m']],
         },
         related: ['perfect-competition', 'supply-and-demand', 'negative-externalities'],
     },
@@ -159,9 +162,12 @@ export const DIAGRAM_PAGES = [
             lines: [
                 [10, 90, 90, 10, '#ef4444', 'MPB'],
                 [10, 10, 90, 90, '#3b82f6', 'MPC'],
-                [10, 30, 78, 95, '#648d49', 'MSC'],
+                // "Keep MSC parallel to MPC" per the howToDraw steps above: same
+                // slope, shifted up by a constant marginal external cost of 20.
+                [10, 30, 75, 95, '#648d49', 'MSC'],
             ],
-            points: [[50, 50, 'Q_1'], [40, 55, 'Q^*']],
+            // Q_1 is MPC = MPB; Q* is MSC = MPB (the social optimum).
+            points: [[50, 50, 'Q_1'], [40, 60, 'Q^*']],
         },
         related: ['positive-externalities', 'tax-incidence', 'subsidy-diagram'],
     },
@@ -207,11 +213,14 @@ export const DIAGRAM_PAGES = [
         axes: ['Quantity (Q)', 'Costs / Benefits (P)'],
         diagram: {
             lines: [
-                [10, 80, 85, 10, '#ef4444', 'MPB'],
-                [18, 95, 90, 22, '#648d49', 'MSB'],
+                [10, 80, 80, 10, '#ef4444', 'MPB'],
+                // MSB parallel to MPB ("MSB > MPB at every quantity"), shifted
+                // up by a constant marginal external benefit of 20.
+                [20, 90, 90, 20, '#648d49', 'MSB'],
                 [10, 10, 90, 90, '#3b82f6', 'MSC'],
             ],
-            points: [[45, 45, 'Q_1'], [56, 56, 'Q^*']],
+            // Q_1 is MPB = MSC (the market underconsumes); Q* is MSB = MSC.
+            points: [[45, 45, 'Q_1'], [55, 55, 'Q^*']],
         },
         related: ['negative-externalities', 'subsidy-diagram', 'supply-and-demand'],
     },
@@ -361,7 +370,8 @@ export const DIAGRAM_PAGES = [
                 [15, 12, 88, 85, '#3b82f6', 'SRAS'],
                 [65, 5, 65, 95, '#64748b', 'LRAS'],
             ],
-            points: [[52, 43, 'Y_1']],
+            // Short-run equilibrium: AD meets SRAS.
+            points: [[47.9, 44.9, 'Y_1']],
         },
         related: ['exchange-rate-diagram', 'ppc-diagram', 'supply-and-demand'],
     },
@@ -413,7 +423,9 @@ export const DIAGRAM_PAGES = [
                 [10, 60, 40, 15, 90, 90, '#22c55e', 'MC'],
                 [10, 85, 50, 40, 90, 80, '#8b5cf6', 'ATC'],
             ],
-            points: [[62, 55, 'Q^*']],
+            // Profit-maximising output: where the rising branch of MC cuts the
+            // price line from below.
+            points: [[60.9, 55, 'Q^*']],
         },
         related: ['monopoly-diagram', 'supply-and-demand', 'ppc-diagram'],
     },
@@ -559,9 +571,12 @@ export const DIAGRAM_PAGES = [
             lines: [
                 [10, 90, 90, 10, '#ef4444', 'D'],
                 [10, 25, 90, 95, '#3b82f6', 'S'],
-                [18, 10, 90, 72, '#22c55e', 'S-sub', true],
+                // A per-unit subsidy shifts S down by a constant amount, so
+                // S-sub must be parallel to S (slope 0.875, gap of 15).
+                [10, 10, 90, 80, '#22c55e', 'S-sub', true],
             ],
-            points: [[47, 55, 'E'], [58, 46, 'E_1']],
+            // E is S = D; E_1 is S-sub = D.
+            points: [[44.7, 55.3, 'E'], [52.7, 47.3, 'E_1']],
         },
         related: ['tax-incidence', 'positive-externalities', 'price-ceilings-and-floors'],
     },
