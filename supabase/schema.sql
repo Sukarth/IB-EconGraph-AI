@@ -205,6 +205,27 @@ create table if not exists public.graph_versions (
 create index if not exists graph_versions_graph_idx
   on public.graph_versions (graph_id, created_at desc);
 
+-- Soft deletes are handled by a trigger further down, but RLS also permits a
+-- hard DELETE of a graph row, which would leave its history behind forever
+-- (nothing else references graph_id). Cascade covers that path declaratively.
+-- Orphans from before this constraint are dropped first, otherwise the
+-- constraint cannot validate; their graph is already gone, so they are
+-- unreachable rows.
+delete from public.graph_versions v
+where not exists (select 1 from public.graphs g where g.id = v.graph_id);
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'graph_versions_graph_id_fkey'
+  ) then
+    alter table public.graph_versions
+      add constraint graph_versions_graph_id_fkey
+      foreign key (graph_id) references public.graphs (id) on delete cascade;
+  end if;
+end;
+$$;
+
 alter table public.graph_versions enable row level security;
 
 drop policy if exists "graph_versions: select own" on public.graph_versions;
@@ -265,6 +286,12 @@ security definer
 set search_path = public
 as $$
 begin
+  -- Serialise per graph. Two devices inserting at once would otherwise each
+  -- see the other's row as still-retained and both keep it, leaving more than
+  -- the cap. The lock is transaction-scoped and keyed on the graph, so it only
+  -- ever blocks a concurrent insert for that same graph.
+  perform pg_advisory_xact_lock(hashtextextended(new.graph_id::text, 0));
+
   delete from public.graph_versions
   where graph_id = new.graph_id
     and user_id = new.user_id
@@ -414,21 +441,38 @@ create policy "shares: delete own"
 -- Note this covers directly shared rows only. A graph deleted out of a SHARED
 -- PROJECT still needs the client to re-render that project's payload, since the
 -- payload is a snapshot the database can't rebuild.
+-- Covers a hard DELETE as well as the soft delete: RLS lets an owner delete the
+-- row outright, and shares deliberately carry no foreign key to graphs (the
+-- payload is a self-contained snapshot, so a diagram can be shared before sync
+-- has pushed its row). Without the DELETE branch, hard-deleting shared content
+-- leaves its public slug resolving forever.
 create or replace function public.purge_shares_for_deleted_content()
 returns trigger
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  target_id uuid;
+  owner_id  uuid;
 begin
-  if new.deleted and not coalesce(old.deleted, false) then
-    if tg_table_name = 'graphs' then
-      delete from public.shares
-      where user_id = new.user_id and kind = 'graph' and graph_id = new.id;
-    else
-      delete from public.shares
-      where user_id = new.user_id and kind = 'project' and project_id = new.id;
-    end if;
+  if tg_op = 'DELETE' then
+    target_id := old.id;
+    owner_id  := old.user_id;
+  elsif new.deleted and not coalesce(old.deleted, false) then
+    -- On INSERT, old is NULL here (not unassigned), so coalesce is safe.
+    target_id := new.id;
+    owner_id  := new.user_id;
+  else
+    return null;
+  end if;
+
+  if tg_table_name = 'graphs' then
+    delete from public.shares
+    where user_id = owner_id and kind = 'graph' and graph_id = target_id;
+  else
+    delete from public.shares
+    where user_id = owner_id and kind = 'project' and project_id = target_id;
   end if;
   return null;
 end;
@@ -438,12 +482,12 @@ revoke execute on function public.purge_shares_for_deleted_content() from public
 
 drop trigger if exists graphs_purge_shares_on_delete on public.graphs;
 create trigger graphs_purge_shares_on_delete
-  after insert or update of deleted on public.graphs
+  after insert or update of deleted or delete on public.graphs
   for each row execute function public.purge_shares_for_deleted_content();
 
 drop trigger if exists projects_purge_shares_on_delete on public.projects;
 create trigger projects_purge_shares_on_delete
-  after insert or update of deleted on public.projects
+  after insert or update of deleted or delete on public.projects
   for each row execute function public.purge_shares_for_deleted_content();
 
 -- ----------------------------------------------------------------------------
@@ -515,6 +559,13 @@ as $$
 declare
   new_count integer;
 begin
+  -- A non-positive limit means "no generations allowed". Without this the very
+  -- first call each month would still succeed, because the limit is only
+  -- checked on the conflict path below.
+  if p_limit <= 0 then
+    return -1;
+  end if;
+
   insert into public.ai_usage (user_id, month, count)
   values (p_user, p_month, 1)
   on conflict (user_id, month) do update
