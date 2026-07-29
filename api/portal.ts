@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getUserFromRequest } from './_lib/supabaseAdmin';
-import { getPolar } from './_lib/polar';
+import { getUserFromRequest } from './_lib/supabaseAdmin.js';
+import { getPolar } from './_lib/polar.js';
 
 /**
  * Creates a Polar customer-portal session (manage / cancel subscription,

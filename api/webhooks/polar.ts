@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks';
-import { getSupabaseAdmin } from '../_lib/supabaseAdmin';
-import { ENTITLED_POLAR_STATUSES } from '../../services/entitlement';
+import { getSupabaseAdmin } from '../_lib/supabaseAdmin.js';
+import { ENTITLED_POLAR_STATUSES } from '../../services/entitlement.js';
 
 // Signature verification requires the raw request body.
 export const config = {

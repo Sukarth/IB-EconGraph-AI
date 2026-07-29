@@ -5,6 +5,7 @@ import { getAIProvider } from './services/aiProvider';
 import { useAuth } from './services/auth';
 import { useCloudSync } from './services/useCloudSync';
 import { recordTombstones, clearTombstones, fetchCloudIds } from './services/sync';
+import { CLIENT_ROUTES, SHARE_PATH } from './routes.mjs';
 import {
   GUEST_SCOPE,
   initLocalStore,
@@ -80,15 +81,29 @@ const PROJECT_COLORS = [
 
 type ViewType = 'landing' | 'home' | 'editor' | 'settings' | 'pricing' | 'compare' | 'shared' | 'privacy' | 'terms';
 
+// The route table lives in routes.mjs so the build can read it too, and refuse
+// to ship a route the deployment has nothing to serve it with.
+const ROUTE_VIEWS = CLIENT_ROUTES as Record<string, ViewType | undefined>;
+
+// The same table read backwards: which URL to show for a given view. Looking the
+// path up rather than building `/${view}` keeps the two from drifting if a view
+// is ever named differently from its route.
+const PATH_FOR_VIEW: Partial<Record<ViewType, string>> = Object.fromEntries(
+  Object.entries(ROUTE_VIEWS).map(([path, view]) => [view, path]),
+);
+
+// Views reachable by navigating. 'shared' is left out because you get there by
+// opening a share link, and there is no /shared route for the edge to serve, so
+// pushing one would work until the first reload. That exclusion is a compile
+// error, but only for 'shared': a view added to ViewType later joins this type
+// automatically and may still have no route. The build guard catches that case,
+// and navigateToView refuses to move rather than papering over it.
+type RoutableView = Exclude<ViewType, 'shared'>;
+
 function parsePath(pathname: string): { view: ViewType; sharedSlug: string | null } {
-  if (pathname === '/home') return { view: 'home', sharedSlug: null };
-  if (pathname === '/editor') return { view: 'editor', sharedSlug: null };
-  if (pathname === '/settings') return { view: 'settings', sharedSlug: null };
-  if (pathname === '/pricing') return { view: 'pricing', sharedSlug: null };
-  if (pathname === '/compare') return { view: 'compare', sharedSlug: null };
-  if (pathname === '/privacy') return { view: 'privacy', sharedSlug: null };
-  if (pathname === '/terms') return { view: 'terms', sharedSlug: null };
-  const shareMatch = pathname.match(/^\/s\/([A-Za-z0-9_-]{6,64})\/?$/);
+  const view = ROUTE_VIEWS[pathname];
+  if (view) return { view, sharedSlug: null };
+  const shareMatch = pathname.match(SHARE_PATH);
   if (shareMatch) return { view: 'shared', sharedSlug: shareMatch[1] };
   return { view: 'landing', sharedSlug: null }; // default for '/' and unknown paths
 }
@@ -565,9 +580,16 @@ export default function App() {
   }, [standardColors, hasInitialized]);
 
   // --- Navigation Functions ---
-  const navigateToView = useCallback((newView: ViewType) => {
+  const navigateToView = useCallback((newView: RoutableView) => {
+    const path = newView === 'landing' ? '/' : PATH_FOR_VIEW[newView];
+    if (!path) {
+      // Only reachable if a view was added without a route in routes.mjs, which
+      // the build guard rejects. Staying put is worse than navigating but better
+      // than showing the view at a URL that 404s the moment anyone reloads.
+      console.error(`navigateToView: no route for view "${newView}".`);
+      return;
+    }
     setView(newView);
-    const path = newView === 'landing' ? '/' : `/${newView}`;
     window.history.pushState({}, '', path);
   }, []);
 

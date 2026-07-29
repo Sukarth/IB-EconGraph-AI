@@ -7,13 +7,13 @@ import {
     isProfilePro,
     currentUsageMonth,
     hostedMonthlyLimit as monthlyLimit,
-} from './_lib/supabaseAdmin';
+} from './_lib/supabaseAdmin.js';
 import {
     DIAGRAM_SYSTEM_INSTRUCTION,
     GEMINI_DIAGRAM_SCHEMA,
     buildHistoryContext,
     diagramShapeError,
-} from '../services/diagramPrompt';
+} from '../services/diagramPrompt.js';
 
 const MAX_PROMPT_CHARS = 4000;
 const MAX_HISTORY_ENTRIES = 40;
