@@ -655,7 +655,8 @@ function assertEveryClientRouteIsServed() {
         );
         process.exit(1);
     }
-    const views = [...viewTypeDecl[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    // Quote style is a formatting choice, not a meaningful one, so read either.
+    const views = [...viewTypeDecl[1].matchAll(/(['"])([^'"]+)\1/g)].map((m) => m[2]);
     // 'landing' is '/', and 'shared' is reached through a share link, so neither
     // has an entry of its own in the table.
     const routelessViews = new Set(['landing', 'shared']);
@@ -666,6 +667,22 @@ function assertEveryClientRouteIsServed() {
             `Route guard: view(s) ${stranded.join(', ')} exist in App.tsx ViewType but have no ` +
             'route in routes.mjs. Navigating to one would push a URL that 404s on reload. Add a ' +
             'route, or add the view to routelessViews here if it is reached some other way.',
+        );
+        process.exit(1);
+    }
+
+    // And the same comparison the other way. Retyping an existing view's name is
+    // already caught above, because the real view then looks stranded, but an
+    // added entry naming a view that does not exist leaves coverage intact and
+    // slips through. That path would be served, and then render as whatever the
+    // view switch falls back to rather than as a 404.
+    const declaredViews = new Set(views);
+    const undeclared = [...routedViews].filter((v) => !declaredViews.has(v));
+    if (undeclared.length > 0) {
+        console.error(
+            `Route guard: routes.mjs maps to view(s) ${undeclared.join(', ')}, which App.tsx ` +
+            'ViewType does not declare. Those paths would be served and then render as an ' +
+            'unknown view. Check the spelling against ViewType.',
         );
         process.exit(1);
     }
