@@ -1,0 +1,6 @@
+{
+  "schedule": "daily",
+  "ignoredFiles": [
+    "public/favicon.svg"
+  ]
+}

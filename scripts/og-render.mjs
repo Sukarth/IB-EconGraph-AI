@@ -12,6 +12,14 @@
  * Headless Chrome does the rendering because it is already a dependency of
  * nobody: no npm package to install, and it resolves system fonts the same way
  * the browser preview does, so what was approved is what gets written.
+ *
+ * NOTE: the committed PNGs have been through ImgBot, which losslessly recompresses
+ * them by about 30% (2.6 MB rather than 3.7 MB). Chrome does not compress that
+ * hard, so re-running this rewrites all sixteen at the larger size and shows up
+ * as a diff touching every card. That is expected. Commit it and let ImgBot
+ * shrink them again in its own PR, or run them through an optimiser yourself.
+ * Chrome's output is otherwise deterministic: rendering without changing a card
+ * produces byte-identical files.
  */
 
 import { execFile } from 'node:child_process';
