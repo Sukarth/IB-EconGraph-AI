@@ -30,7 +30,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # supabase-js needs 22+ for native WebSocket: on 20 createClient throws
+          # before it can query. 24 matches Vercel and local.
+          node-version: '24'
           cache: 'npm'
       - run: npm ci
       - name: Refresh supporters block
