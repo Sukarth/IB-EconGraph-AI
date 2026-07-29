@@ -196,11 +196,13 @@ export default function App() {
   // The handover is decided (so `pendingGuestAdoption` is already false) but the
   // copy is still running. See the auto-open effect.
   const [adoptingGuestWork, setAdoptingGuestWork] = useState(false);
-  // Identifies the guest handover currently in flight, so a copy that finishes
-  // after an account switch can tell it is no longer the current one. A ref
-  // rather than state because the scope-load effect has to invalidate it
-  // synchronously, before it publishes the incoming account's data.
-  const adoptionRef = useRef<symbol | null>(null);
+  // A finished handover waiting for its namespace to be the live one. By the
+  // time adoptScope resolves it has already emptied the guest namespace, so
+  // this data exists in exactly one place and dropping it loses the user's
+  // work. Holding it here lets the effect below wait for the right moment
+  // instead of deciding, from inside an async callback, whether that moment has
+  // passed.
+  const [pendingAdopted, setPendingAdopted] = useState<{ scope: string; graphs: Graph[]; projects: Project[] } | null>(null);
 
   const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[], forUserId: string) => {
     // A sync that lands after the account changed is carrying the previous
@@ -312,12 +314,13 @@ export default function App() {
   // accounts swaps which namespace is live, and never deletes the other one.
   useEffect(() => {
     if (storeScope === null || storeScope === loadedScope) return;
-    // A different namespace is taking over, so any guest handover still in
-    // flight belongs to the one we are leaving. Invalidated here rather than by
-    // comparing scopes when it resolves: this line runs synchronously, before
-    // the await below reads anything, so there is no window in which the new
-    // account's data is already live but the handover still looks current.
-    adoptionRef.current = null;
+    // This effect is about to read the incoming namespace off disk, and a
+    // finished handover was written to disk before it ever got here, so that
+    // read already includes it. Dropping the held copy avoids replaying it over
+    // whatever the read (or a sync that ran meanwhile) turned up. Note this sits
+    // after the early return above: coming back to a namespace that never
+    // stopped being the loaded one does no read, and must not discard anything.
+    setPendingAdopted(null);
     let cancelled = false;
     void (async () => {
       const stored = await readScope(storeScope);
@@ -407,15 +410,10 @@ export default function App() {
     // an empty library, creates a blank diagram and syncs it up, and the adopted
     // graphs then replace it locally while the stray row stays in the cloud.
     setAdoptingGuestWork(true);
-    // Deliberately NOT an effect-scoped `cancelled` flag. Setting
+    // Deliberately no effect-scoped `cancelled` flag. Setting
     // `pendingGuestAdoption` above re-runs this effect, which would trip such a
-    // flag immediately, and by then adoptScope has already emptied the guest
-    // namespace: dropping the result would leave the diagrams written to disk
-    // but absent from state, and the auto-open effect would overwrite them with
-    // a blank one. Only an account switch is a reason to withhold them, and the
-    // scope-load effect above is what says so.
-    const token = Symbol('guest-adoption');
-    adoptionRef.current = token;
+    // flag immediately, and the copy is not conditional on this effect still
+    // being current: it moves the diagrams on disk either way.
     const adoptingInto = storeScope;
     void (async () => {
       try {
@@ -424,17 +422,30 @@ export default function App() {
         // namespace. Leave this account empty rather than showing diagrams that
         // were not actually saved to it.
         if (!adopted) return;
-        // A different account took over while this was copying. The diagrams
-        // are on disk in `adoptingInto` and will be there when it comes back;
-        // publishing them now would file them under whoever is signed in.
-        if (adoptionRef.current !== token) return;
-        setGraphs(adopted.graphs);
-        setProjects(adopted.projects);
+        // Recorded, not published. Deciding here whether the namespace is still
+        // live means reading state this closure captured before the await, and
+        // every version of that check has been wrong in a way that ends with
+        // the adopted diagrams being overwritten by a blank one.
+        setPendingAdopted({ scope: adoptingInto, graphs: adopted.graphs, projects: adopted.projects });
       } finally {
         setAdoptingGuestWork(false);
       }
     })();
   }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, firstPullFailed, graphs.length, projects.length]);
+
+  // Publish an adopted library once its namespace is the live one. Running as
+  // an effect is the point: it reads `storeScope` and `loadedScope` as they are
+  // now, not as they were when the copy started, and it waits rather than
+  // discarding. An account switch mid-copy therefore parks the diagrams here
+  // until that account is back, and if the switch away completed, the load
+  // effect clears this because its own read of the disk already has them.
+  useEffect(() => {
+    if (!pendingAdopted) return;
+    if (storeScope !== pendingAdopted.scope || loadedScope !== pendingAdopted.scope) return;
+    setGraphs(pendingAdopted.graphs);
+    setProjects(pendingAdopted.projects);
+    setPendingAdopted(null);
+  }, [pendingAdopted, storeScope, loadedScope]);
 
   // Keep live refs in sync for dep-free callbacks (see applyRemote).
   // Synced in effects rather than assigned during render: React may discard a
@@ -475,6 +486,11 @@ export default function App() {
       // running, always wait for it: `firstPullFailed` says nothing about
       // whether the diagrams are about to arrive.
       if (adoptingGuestWork) return;
+      // Copy finished, waiting to be published into this namespace. Creating a
+      // blank graph in the gap would be saved over it. Scoped to this namespace
+      // on purpose: a handover parked for another account must not stop this
+      // one getting its starting diagram.
+      if (pendingAdopted && pendingAdopted.scope === storeScope) return;
       // Create new graph if none exist
       const newGraph: Graph = {
         id: generateId(),
@@ -498,7 +514,7 @@ export default function App() {
       historyRef.current = [newGraph.diagramData];
       setHistoryIndex(0);
     }
-  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption, adoptingGuestWork, firstPullFailed]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
+  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption, adoptingGuestWork, pendingAdopted, storeScope, firstPullFailed]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
   // Only write once the namespace in memory is the one we last loaded. During an
