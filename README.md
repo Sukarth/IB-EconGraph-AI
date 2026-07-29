@@ -210,7 +210,7 @@ A huge thank-you to the Supporters keeping this project free for every student.
 
 <!-- SUPPORTERS:START -->
 
-**Sukarth**
+*Become the first. See the [Supporter plan](https://ib-econgraph-ai.vercel.app/pricing).*
 
 <!-- SUPPORTERS:END -->
 
