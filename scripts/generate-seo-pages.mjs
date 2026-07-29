@@ -446,16 +446,22 @@ function render404Page() {
   <text x="328" y="196" font-size="13" font-weight="700" fill="#2563eb">D</text>
 
   <circle cx="62" cy="96" r="5.5" fill="#111827"/>
-  <text x="78" y="92" font-size="13" font-weight="700" fill="#111827">404</text>
+  <text x="78" y="92" font-size="12.5" font-weight="700" fill="#111827">equilibrium at Q = 0</text>
 </svg>`;
 
     const bodyHtml = `
 <main class="wrap">
-  <h1 style="margin-top:48px">This page has no supply</h1>
+  <h1 style="margin-top:48px">Error 404: This page has no supply</h1>
+  <!-- One idea per line. The joke, the translation, then the actual advice:
+       run together as a block they read as one long apology. -->
+  <p class="lede" style="margin:0 0 14px">
+    Demand looks healthy, but quantity supplied is zero, so nothing is traded.
+  </p>
+  <p class="lede" style="margin:0 0 14px">
+    Less economically: that URL is not here.
+  </p>
   <p class="lede">
-    Demand looks healthy. Quantity supplied is zero, so the market clears at
-    nothing at all. Less economically: that URL is not here. Either the address
-    has a typo, or it was a share link that has since been revoked.
+    Either the address has a typo, or it was a share link that has since been revoked.
   </p>
 
   <!-- Narrower than the text column: at full width the diagram dominates the
