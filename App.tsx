@@ -85,6 +85,19 @@ type ViewType = 'landing' | 'home' | 'editor' | 'settings' | 'pricing' | 'compar
 // to ship a route the deployment has nothing to serve it with.
 const ROUTE_VIEWS = CLIENT_ROUTES as Record<string, ViewType | undefined>;
 
+// The same table read backwards: which URL to show for a given view. Looking the
+// path up rather than building `/${view}` keeps the two from drifting if a view
+// is ever named differently from its route.
+const PATH_FOR_VIEW: Partial<Record<ViewType, string>> = Object.fromEntries(
+  Object.entries(ROUTE_VIEWS).map(([path, view]) => [view, path]),
+);
+
+// Views reachable by navigating. 'shared' is missing on purpose: you get there
+// by opening a share link, and there is no /shared route for the edge to serve,
+// so pushing one would work until the first reload. Excluding it here makes that
+// a compile error instead of a 404 nobody sees until production.
+type RoutableView = Exclude<ViewType, 'shared'>;
+
 function parsePath(pathname: string): { view: ViewType; sharedSlug: string | null } {
   const view = ROUTE_VIEWS[pathname];
   if (view) return { view, sharedSlug: null };
@@ -565,10 +578,9 @@ export default function App() {
   }, [standardColors, hasInitialized]);
 
   // --- Navigation Functions ---
-  const navigateToView = useCallback((newView: ViewType) => {
+  const navigateToView = useCallback((newView: RoutableView) => {
     setView(newView);
-    const path = newView === 'landing' ? '/' : `/${newView}`;
-    window.history.pushState({}, '', path);
+    window.history.pushState({}, '', PATH_FOR_VIEW[newView] ?? '/');
   }, []);
 
   // Listen for browser back/forward navigation
