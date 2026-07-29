@@ -638,6 +638,38 @@ function assertEveryClientRouteIsServed() {
         process.exit(1);
     }
 
+    // The check above runs table -> deployment. This one runs the other way: a
+    // view added to ViewType but never given a route is navigable in the app and
+    // unservable on reload, and no type catches it, because RoutableView
+    // subtracts from ViewType rather than deriving from the table.
+    //
+    // A type alias is a much steadier thing to read than a function body, but if
+    // it is ever renamed or reformatted past this pattern, fail rather than let
+    // an unreadable source vacuously satisfy the guard.
+    const appSource = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8');
+    const viewTypeDecl = appSource.match(/^type ViewType = ([^;]+);/m);
+    if (!viewTypeDecl) {
+        console.error(
+            'Route guard: could not find the ViewType alias in App.tsx, so it cannot check that ' +
+            'every view has a route. Update the pattern in this guard.',
+        );
+        process.exit(1);
+    }
+    const views = [...viewTypeDecl[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    // 'landing' is '/', and 'shared' is reached through a share link, so neither
+    // has an entry of its own in the table.
+    const routelessViews = new Set(['landing', 'shared']);
+    const routedViews = new Set(Object.values(CLIENT_ROUTES));
+    const stranded = views.filter((v) => !routelessViews.has(v) && !routedViews.has(v));
+    if (stranded.length > 0) {
+        console.error(
+            `Route guard: view(s) ${stranded.join(', ')} exist in App.tsx ViewType but have no ` +
+            'route in routes.mjs. Navigating to one would push a URL that 404s on reload. Add a ' +
+            'route, or add the view to routelessViews here if it is reached some other way.',
+        );
+        process.exit(1);
+    }
+
     return routes.length;
 }
 

@@ -92,10 +92,12 @@ const PATH_FOR_VIEW: Partial<Record<ViewType, string>> = Object.fromEntries(
   Object.entries(ROUTE_VIEWS).map(([path, view]) => [view, path]),
 );
 
-// Views reachable by navigating. 'shared' is missing on purpose: you get there
-// by opening a share link, and there is no /shared route for the edge to serve,
-// so pushing one would work until the first reload. Excluding it here makes that
-// a compile error instead of a 404 nobody sees until production.
+// Views reachable by navigating. 'shared' is left out because you get there by
+// opening a share link, and there is no /shared route for the edge to serve, so
+// pushing one would work until the first reload. That exclusion is a compile
+// error, but only for 'shared': a view added to ViewType later joins this type
+// automatically and may still have no route. The build guard catches that case,
+// and navigateToView refuses to move rather than papering over it.
 type RoutableView = Exclude<ViewType, 'shared'>;
 
 function parsePath(pathname: string): { view: ViewType; sharedSlug: string | null } {
@@ -579,8 +581,16 @@ export default function App() {
 
   // --- Navigation Functions ---
   const navigateToView = useCallback((newView: RoutableView) => {
+    const path = newView === 'landing' ? '/' : PATH_FOR_VIEW[newView];
+    if (!path) {
+      // Only reachable if a view was added without a route in routes.mjs, which
+      // the build guard rejects. Staying put is worse than navigating but better
+      // than showing the view at a URL that 404s the moment anyone reloads.
+      console.error(`navigateToView: no route for view "${newView}".`);
+      return;
+    }
     setView(newView);
-    window.history.pushState({}, '', PATH_FOR_VIEW[newView] ?? '/');
+    window.history.pushState({}, '', path);
   }, []);
 
   // Listen for browser back/forward navigation
