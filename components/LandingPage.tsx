@@ -222,6 +222,17 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                         </span>
                     </div>
                     <div className="flex items-center gap-3">
+                        {/* A real navigation, not a SPA route: /diagrams is a
+                            prerendered static page outside the bundle. With no
+                            link here, those pages were reachable only from
+                            search results and nothing on the site pointed at
+                            them. */}
+                        <a
+                            href="/diagrams"
+                            className="hidden md:block text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors px-2"
+                        >
+                            Diagrams
+                        </a>
                         <button
                             onClick={onOpenPricing}
                             className="hidden md:block text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors px-2"
@@ -761,6 +772,12 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOp
                         Free & open source. Built for IB Economics students and educators.
                     </p>
                     <div className="flex flex-wrap items-center justify-center gap-4">
+                        <a
+                            href="/diagrams"
+                            className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
+                        >
+                            Diagrams
+                        </a>
                         <button
                             onClick={onOpenPricing}
                             className="text-sm text-gray-500 hover:text-gray-900 transition-colors"

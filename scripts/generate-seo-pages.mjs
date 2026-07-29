@@ -3,8 +3,18 @@
 //
 // The pages are plain, dependency-free HTML (inline CSS, inline SVG) so they
 // are fast, fully crawlable, and independent of the SPA bundle. Vercel serves
-// them via cleanUrls (dist/diagrams/foo.html → /diagrams/foo) ahead of the
-// SPA rewrite, which only applies when no file matches.
+// them via cleanUrls (dist/diagrams/foo.html → /diagrams/foo).
+//
+// Everything this writes is invisible unless vercel.json's `buildCommand` runs
+// `npm run build`. The project's dashboard build command is `vite build`, which
+// skips this script entirely, and the symptom is subtle: the app still deploys
+// and the homepage still works, while every generated page 404s.
+//
+// vercel.json lists the SPA's routes individually rather than rewriting
+// everything to the app, so that anything not matching a file or a known route
+// reaches dist/404.html and returns a real 404 status. A catch-all would answer
+// every mistyped URL with 200 and the app, which tells crawlers that infinitely
+// many junk URLs are real pages.
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -188,7 +198,7 @@ footer.site a{color:#6b7280}
 
 const LOGO_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`;
 
-function pageShell({ title, description, canonicalPath, jsonLd, bodyHtml }) {
+function pageShell({ title, description, canonicalPath, jsonLd, bodyHtml, robots = 'index, follow' }) {
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -196,7 +206,7 @@ function pageShell({ title, description, canonicalPath, jsonLd, bodyHtml }) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}"/>
-<meta name="robots" content="index, follow"/>
+<meta name="robots" content="${esc(robots)}"/>
 <link rel="canonical" href="${SITE_URL}${canonicalPath}"/>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml"/>
 <meta name="theme-color" content="#2563eb"/>
@@ -483,6 +493,92 @@ ${urls
 `;
 }
 
+/**
+ * Vercel serves dist/404.html, with a 404 status, for any path that matches
+ * neither a file nor a rewrite. That is the reason the rewrites in vercel.json
+ * name the SPA's routes one by one instead of catching everything: a catch-all
+ * would make every typo return the app with a 200, which tells crawlers a
+ * misspelled URL is a real page.
+ *
+ * The joke is a market with demand but no supply, which is exactly what a
+ * missing page is. Perfectly inelastic supply at Q = 0, so the curves meet on
+ * the price axis and no quantity is ever traded.
+ */
+function render404Page() {
+    const figure = `
+<svg viewBox="0 0 420 300" role="img" aria-label="Supply and demand diagram in which supply is a vertical line at a quantity of zero, so no quantity is ever traded.">
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <line x1="60" y1="250" x2="390" y2="250" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="60" y1="250" x2="60" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="384" y="272" font-size="12" fill="#6b7280" text-anchor="end">Quantity of this page</text>
+  <text x="52" y="34" font-size="12" fill="#6b7280" text-anchor="end">Price</text>
+
+  <!-- Supply: perfectly inelastic at Q = 0. There is exactly one of this page,
+       and we do not have it. -->
+  <line x1="60" y1="40" x2="60" y2="250" stroke="#22c55e" stroke-width="6" stroke-linecap="round"/>
+  <text x="74" y="56" font-size="13" font-weight="700" fill="#16a34a">S</text>
+  <text x="74" y="72" font-size="11" fill="#6b7280">supply of this page</text>
+
+  <!-- Demand: entirely normal. You wanted it. -->
+  <line x1="60" y1="70" x2="360" y2="240" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
+  <text x="336" y="228" font-size="13" font-weight="700" fill="#2563eb">D</text>
+  <text x="278" y="212" font-size="11" fill="#6b7280">your demand for it</text>
+
+  <circle cx="60" cy="70" r="5.5" fill="#111827"/>
+  <text x="78" y="100" font-size="13" font-weight="700" fill="#111827">404</text>
+  <text x="78" y="116" font-size="11" fill="#6b7280">equilibrium at Q = 0</text>
+</svg>`;
+
+    const bodyHtml = `
+<main class="wrap">
+  <h1 style="margin-top:48px">This page has no supply</h1>
+  <p class="lede">
+    Demand looks healthy. Unfortunately the quantity supplied is zero, so the
+    market clears at nothing at all. In less economic terms: that URL does not
+    exist here.
+  </p>
+
+  <div class="figure">${figure}</div>
+
+  <p>It was probably one of these:</p>
+  <ul class="what">
+    <li>A <b>typo in the address</b>, which is the cheapest thing to rule out.</li>
+    <li>A <b>share link that was revoked</b>. Share links can be turned off by whoever created them, and once revoked the diagram is private again.</li>
+    <li>An <b>old link</b> to a page that has since moved.</li>
+  </ul>
+
+  <div class="cta-row">
+    <a class="btn primary" href="/editor">Open the editor${ARROW}</a>
+    <a class="btn ghost" href="/diagrams">Browse diagram guides</a>
+  </div>
+  <p class="free-note">Free, unlimited and watermark-free. No account needed to draw.</p>
+
+  <h2>Popular diagram guides</h2>
+  <div class="cards">
+    ${DIAGRAM_PAGES.slice(0, 6)
+        .map(
+            (p) => `<a href="/diagrams/${p.slug}"><div class="k">${esc(p.navTitle)}</div><div class="d">${esc(p.h1)}</div></a>`,
+        )
+        .join('\n    ')}
+  </div>
+</main>`;
+
+    return pageShell({
+        title: 'Page not found · IB EconGraph AI',
+        description: 'That page does not exist. Browse the IB Economics diagram guides or open the free editor.',
+        canonicalPath: '/404',
+        // A 404 is not a destination. Keep it out of the index, and out of the
+        // sitemap (see renderSitemap).
+        robots: 'noindex, follow',
+        jsonLd: [],
+        bodyHtml,
+    });
+}
+
 // ── emit ─────────────────────────────────────────────────────────────────────
 
 mkdirSync(join(DIST, 'diagrams'), { recursive: true });
@@ -497,8 +593,9 @@ for (const route of SPA_ROUTES) {
     writeFileSync(join(DIST, route.file), renderSpaRouteShell(indexHtml, route));
 }
 
+writeFileSync(join(DIST, '404.html'), render404Page());
 writeFileSync(join(DIST, 'sitemap.xml'), renderSitemap());
 
 console.log(
-    `Generated ${DIAGRAM_PAGES.length} diagram pages + hub + ${SPA_ROUTES.length} route shells + sitemap.xml into dist/`,
+    `Generated ${DIAGRAM_PAGES.length} diagram pages + hub + ${SPA_ROUTES.length} route shells + 404 + sitemap.xml into dist/`,
 );

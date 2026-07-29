@@ -1,4 +1,6 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run build",
   "cleanUrls": true,
   "trailingSlash": false,
   "functions": {
@@ -7,9 +9,9 @@
     }
   },
   "rewrites": [
-    {
-      "source": "/((?!api/).*)",
-      "destination": "/index.html"
-    }
+    { "source": "/home", "destination": "/" },
+    { "source": "/editor", "destination": "/" },
+    { "source": "/settings", "destination": "/" },
+    { "source": "/s/:slug", "destination": "/" }
   ]
 }
