@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getSupabaseAdmin, getUserFromRequest, getProfile } from './_lib/supabaseAdmin';
-import { getPolar } from './_lib/polar';
-import { ENTITLED_POLAR_STATUSES } from '../services/entitlement';
+import { getSupabaseAdmin, getUserFromRequest, getProfile } from './_lib/supabaseAdmin.js';
+import { getPolar } from './_lib/polar.js';
+import { ENTITLED_POLAR_STATUSES } from '../services/entitlement.js';
 
 /**
  * Permanently deletes the signed-in user's account and all cloud data.

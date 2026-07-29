@@ -6,7 +6,7 @@ import {
     isProfilePro,
     currentUsageMonth,
     hostedMonthlyLimit as monthlyLimit,
-} from './_lib/supabaseAdmin';
+} from './_lib/supabaseAdmin.js';
 
 /** Returns the signed-in user's hosted AI usage for the current month. */
 export default async function handler(req: VercelRequest, res: VercelResponse) {

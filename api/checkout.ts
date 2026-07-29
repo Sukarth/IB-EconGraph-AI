@@ -1,8 +1,8 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { getUserFromRequest, getProfile, isProfilePro } from './_lib/supabaseAdmin';
-import { getPolar, getAppUrl } from './_lib/polar';
+import { getUserFromRequest, getProfile, isProfilePro } from './_lib/supabaseAdmin.js';
+import { getPolar, getAppUrl } from './_lib/polar.js';
 // Subscription is live (or in dunning), a new checkout would double-charge.
-import { ENTITLED_POLAR_STATUSES } from '../services/entitlement';
+import { ENTITLED_POLAR_STATUSES } from '../services/entitlement.js';
 
 /**
  * Creates a Polar checkout session for the Supporter plan and returns its URL.

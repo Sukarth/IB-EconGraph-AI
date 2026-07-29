@@ -1,6 +1,6 @@
 import { createClient, SupabaseClient, User } from '@supabase/supabase-js';
 import type { VercelRequest } from '@vercel/node';
-import { isProUntilActive } from '../../services/entitlement';
+import { isProUntilActive } from '../../services/entitlement.js';
 
 let cached: SupabaseClient | null = null;
 
