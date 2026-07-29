@@ -1,10 +1,31 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { generateDiagramData, hasApiKey } from './services/ai';
+import { getAIProvider } from './services/aiProvider';
+import { useAuth } from './services/auth';
+import { useCloudSync } from './services/useCloudSync';
+import { recordTombstones, clearTombstones, fetchCloudIds } from './services/sync';
+import {
+  GUEST_SCOPE,
+  initLocalStore,
+  requestPersistentStorage,
+  readScope,
+  writeGraphs,
+  writeProjects,
+  scopeHasContent,
+  adoptScope,
+  decideGuestAdoption,
+} from './services/localStore';
 import DiagramRenderer from './components/DiagramRenderer';
 import LandingPage from './components/LandingPage';
 import HomePage from './components/HomePage';
 import SettingsPage from './components/SettingsPage';
+import PricingPage from './components/PricingPage';
+import ComparePage from './components/ComparePage';
+import { PrivacyPage, TermsPage } from './components/LegalPages';
+import SharedViewPage from './components/SharedViewPage';
+import ShareModal from './components/ShareModal';
+import CloudHistoryModal from './components/CloudHistoryModal';
 import ToolbarLeft from './components/ToolbarLeft';
 import ToolbarRight from './components/ToolbarRight';
 import ComponentLibrary from './components/ComponentLibrary';
@@ -13,17 +34,19 @@ import { usePortalTooltip } from './components/usePortalTooltip';
 import { DiagramData, INITIAL_DIAGRAM, EMPTY_DIAGRAM, Graph, Project, Message, EditorTool, EditorSettings, ComponentTemplate } from './types';
 import {
   Loader2, Send, Plus, MessageSquare, BarChart2,
-  Trash2, Menu, History, RotateCcw, RotateCw, FolderOpen, ChevronLeft, Grid3X3, AlertTriangle, Settings
+  Trash2, Menu, History, RotateCcw, RotateCw, FolderOpen, ChevronLeft, Grid3X3, AlertTriangle, Settings,
+  Share2, CloudDownload
 } from 'lucide-react';
 
 const generateId = () => uuidv4();
 
+// Diagrams and projects are stored per account (see services/localStore.ts).
+// These keys are editor preferences, which are deliberately shared across
+// accounts on the same browser: they describe the tool, not anyone's work.
 const STORAGE_KEYS = {
-  graphs: 'econgraph_graphs',
-  projects: 'econgraph_projects',
   settings: 'econgraph_settings',
   specialColors: 'econgraph_special_colors',
-  standardColors: 'econgraph_standard_colors'
+  standardColors: 'econgraph_standard_colors',
 };
 
 const DEFAULT_STANDARD_COLORS = [
@@ -55,18 +78,28 @@ const PROJECT_COLORS = [
   '#ec4899', // Pink
 ];
 
-type ViewType = 'landing' | 'home' | 'editor' | 'settings';
+type ViewType = 'landing' | 'home' | 'editor' | 'settings' | 'pricing' | 'compare' | 'shared' | 'privacy' | 'terms';
+
+function parsePath(pathname: string): { view: ViewType; sharedSlug: string | null } {
+  if (pathname === '/home') return { view: 'home', sharedSlug: null };
+  if (pathname === '/editor') return { view: 'editor', sharedSlug: null };
+  if (pathname === '/settings') return { view: 'settings', sharedSlug: null };
+  if (pathname === '/pricing') return { view: 'pricing', sharedSlug: null };
+  if (pathname === '/compare') return { view: 'compare', sharedSlug: null };
+  if (pathname === '/privacy') return { view: 'privacy', sharedSlug: null };
+  if (pathname === '/terms') return { view: 'terms', sharedSlug: null };
+  const shareMatch = pathname.match(/^\/s\/([A-Za-z0-9_-]{6,64})\/?$/);
+  if (shareMatch) return { view: 'shared', sharedSlug: shareMatch[1] };
+  return { view: 'landing', sharedSlug: null }; // default for '/' and unknown paths
+}
+
+/** Why AI generation is unavailable, or null when it's usable. */
+type AiGate = null | 'hosted-signin' | 'hosted-upgrade' | 'byok-nokey';
 
 export default function App() {
   // --- View State ---
-  const [view, setView] = useState<ViewType>(() => {
-    // Initialize view based on URL path
-    const path = window.location.pathname;
-    if (path === '/home') return 'home';
-    if (path === '/editor') return 'editor';
-    if (path === '/settings') return 'settings';
-    return 'landing'; // default to landing for '/' and any other path
-  });
+  const [view, setView] = useState<ViewType>(() => parsePath(window.location.pathname).view);
+  const [sharedSlug, setSharedSlug] = useState<string | null>(() => parsePath(window.location.pathname).sharedSlug);
 
   // --- Data State ---
   const [graphs, setGraphs] = useState<Graph[]>([]);
@@ -127,6 +160,8 @@ export default function App() {
   }>({ visible: false, currentColor: '#3b82f6', onSelect: () => { } });
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [cloudHistoryOpen, setCloudHistoryOpen] = useState(false);
 
   // History for undo/redo
   const [history, setHistory] = useState<DiagramData[]>([]);
@@ -139,23 +174,119 @@ export default function App() {
 
   const { showTooltip: showSendTooltip, hideTooltip: hideSendTooltip, TooltipPortal: SendTooltipPortal } = usePortalTooltip({ delay: 400, placement: 'top' });
 
-  // --- Load from localStorage on mount ---
+  // --- Cloud (accounts + sync are Supporter features; app is fully usable without) ---
+  const { configured: cloudConfigured, loading: authLoading, user, isPro } = useAuth();
+
+  // Live refs so applyRemote (a stable, dep-free callback) can see the graph
+  // currently open in the editor without being re-created on every edit.
+  const activeGraphIdRef = useRef<string | null>(null);
+  const currentDiagramRef = useRef<DiagramData>(INITIAL_DIAGRAM);
+
+  // Which account's local data is live. `null` while the session is still being
+  // restored, so we don't briefly load guest data for someone who is signed in.
+  const storeScope = authLoading ? null : (user?.id ?? GUEST_SCOPE);
+  const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  // Browser storage refused to give up this namespace. Saving is off for the
+  // session so the stored copy survives, and the banner says so.
+  const [storageUnreadable, setStorageUnreadable] = useState(false);
+  const loadedScopeRef = useRef<string | null>(null);
+  // True between signing in and deciding whether signed-out work joins this
+  // account. The editor holds off creating a blank diagram until it resolves.
+  const [pendingGuestAdoption, setPendingGuestAdoption] = useState(false);
+  // The handover is decided (so `pendingGuestAdoption` is already false) but the
+  // copy is still running. See the auto-open effect.
+  const [adoptingGuestWork, setAdoptingGuestWork] = useState(false);
+  // A finished handover waiting for its namespace to be the live one. By the
+  // time adoptScope resolves it has already emptied the guest namespace, so
+  // this data exists in exactly one place and dropping it loses the user's
+  // work. Holding it here lets the effect below wait for the right moment
+  // instead of deciding, from inside an async callback, whether that moment has
+  // passed.
+  const [pendingAdopted, setPendingAdopted] = useState<{ scope: string; graphs: Graph[]; projects: Project[] } | null>(null);
+
+  const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[], forUserId: string) => {
+    // A sync that lands after the account changed is carrying the previous
+    // account's cloud data. Dropping it keeps that data out of this account
+    // (and off this account's next upload).
+    if (loadedScopeRef.current !== forUserId) return;
+    setGraphs(remoteGraphs);
+    setProjects(remoteProjects);
+    // If the graph open in the editor was changed by this pull (e.g. edited on
+    // another device), refresh the editor's live copy, otherwise the next
+    // autosave writes our stale currentDiagram back over the newer cloud version.
+    // BUT only when there are no unsaved local edits in flight: a pending
+    // autosave means currentDiagram holds edits not yet written to `graphs`, and
+    // overwriting it here would silently discard them and reset the undo stack.
+    const openId = activeGraphIdRef.current;
+    if (openId && autosaveDebounceRef.current === null) {
+      const incoming = remoteGraphs.find((g) => g.id === openId);
+      if (!incoming) {
+        // Deleted on another device. The merge already dropped it, so leaving
+        // it open would keep editing (and re-uploading) a graph that no longer
+        // exists. Close it and let the auto-open effect pick the next one.
+        setActiveGraphId(null);
+        const blank = { ...EMPTY_DIAGRAM };
+        setCurrentDiagram(blank);
+        setHistory([blank]);
+        historyRef.current = [blank];
+        historyIndexRef.current = 0;
+        setHistoryIndex(0);
+      } else if (JSON.stringify(incoming.diagramData) !== JSON.stringify(currentDiagramRef.current)) {
+        setCurrentDiagram(incoming.diagramData);
+        setHistory([incoming.diagramData]);
+        historyRef.current = [incoming.diagramData];
+        historyIndexRef.current = 0;
+        setHistoryIndex(0);
+      }
+    }
+  }, []);
+
+  const { syncState, syncNow } = useCloudSync({
+    // Withhold the account until its own local data is the data in memory.
+    // Syncing during a switch, while the previous account's diagrams are still
+    // loaded, would upload them into this account.
+    userId: user && isPro && loadedScope === user.id ? user.id : null,
+    hasInitialized,
+    graphs,
+    projects,
+    applyRemote,
+  });
+
+  // A signed-in Supporter's local store can be empty simply because the first
+  // cloud pull hasn't landed yet, used below to avoid creating (and syncing
+  // up) a throwaway blank graph before we've heard whether the cloud has data.
+  // 'disabled' counts too: for a Supporter it means the sync loop hasn't picked
+  // this account up yet, which is still "before the first pull". Without it
+  // there's a render where the store looks empty and the editor would create a
+  // blank diagram (and upload it) moments before the real data arrives.
+  const awaitingFirstPull =
+    cloudConfigured && !!user && isPro &&
+    syncState.lastSyncedAt === null &&
+    (syncState.status === 'idle' || syncState.status === 'syncing' || syncState.status === 'disabled');
+
+  // The first pull did not just fail to arrive, it failed outright. We cannot
+  // tell whether this account's cloud is empty, so any decision that depends on
+  // "the account has nothing" has to stay unresolved.
+  const firstPullFailed =
+    cloudConfigured && !!user && isPro &&
+    syncState.lastSyncedAt === null &&
+    (syncState.status === 'error' || syncState.status === 'offline');
+
+  // --- Load shared editor preferences on mount ---
+  // Diagrams and projects are NOT loaded here: they belong to whichever account
+  // is signed in, which isn't known until the session has been restored. See
+  // the scope effect below.
   useEffect(() => {
+    // Open the diagram store (and migrate into it) early. Reads wait on this
+    // internally, so this is just a head start, not a prerequisite.
+    void initLocalStore();
+    // Ask the browser not to evict saved diagrams when disk runs low.
+    void requestPersistentStorage();
     try {
-      const savedGraphs = localStorage.getItem(STORAGE_KEYS.graphs);
-      const savedProjects = localStorage.getItem(STORAGE_KEYS.projects);
       const savedSettings = localStorage.getItem(STORAGE_KEYS.settings);
       const savedSpecial = localStorage.getItem(STORAGE_KEYS.specialColors);
       const savedStandard = localStorage.getItem(STORAGE_KEYS.standardColors);
 
-      if (savedGraphs) {
-        const parsed = JSON.parse(savedGraphs) as Graph[];
-        setGraphs(parsed);
-      }
-      if (savedProjects) {
-        const parsed = JSON.parse(savedProjects) as Project[];
-        setProjects(parsed);
-      }
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
         setSettings(s => ({ ...s, ...parsed }));
@@ -173,10 +304,157 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.error('Failed to load data from localStorage:', e);
+      console.error('Failed to load preferences from localStorage:', e);
     }
-    setHasInitialized(true);
   }, []);
+
+  // --- Per-account local data ---
+  // Everyone who uses this browser gets their own namespace: one per signed-in
+  // account, plus a shared "guest" one for work done signed out. Switching
+  // accounts swaps which namespace is live, and never deletes the other one.
+  useEffect(() => {
+    if (storeScope === null || storeScope === loadedScope) return;
+    // This effect is about to read the incoming namespace off disk, and a
+    // finished handover was written to disk before it ever got here, so that
+    // read already includes it. Dropping the held copy avoids replaying it over
+    // whatever the read (or a sync that ran meanwhile) turned up. Note this sits
+    // after the early return above: coming back to a namespace that never
+    // stopped being the loaded one does no read, and must not discard anything.
+    setPendingAdopted(null);
+    let cancelled = false;
+    void (async () => {
+      const stored = await readScope(storeScope);
+      // Signing in with nothing of your own, over work done signed out, is the
+      // one case where the two might be joined. Resolve it here so the editor
+      // waits for that decision instead of creating a blank diagram meanwhile.
+      const guestPending =
+        stored.ok
+        && storeScope !== GUEST_SCOPE
+        && stored.graphs.length === 0
+        && stored.projects.length === 0
+        && await scopeHasContent(GUEST_SCOPE);
+      // The account may have changed again while this was loading; whichever
+      // effect run matches the live namespace is the one allowed to apply.
+      if (cancelled) return;
+
+      setGraphs(stored.graphs);
+      setProjects(stored.projects);
+      setPendingGuestAdoption(guestPending);
+      // Drop timers armed by the outgoing account. A pending autosave would
+      // write its diagram into this namespace, and a pending history push would
+      // put it in the new account's undo stack.
+      if (historyDebounceRef.current !== null) {
+        window.clearTimeout(historyDebounceRef.current);
+        historyDebounceRef.current = null;
+      }
+      if (autosaveDebounceRef.current !== null) {
+        window.clearTimeout(autosaveDebounceRef.current);
+        autosaveDebounceRef.current = null;
+      }
+      // Close whatever was open and blank the canvas: it belongs to the
+      // namespace we're leaving. The auto-open effect below picks this
+      // account's most recent diagram once its data is in place.
+      setActiveGraphId(null);
+      const blank = { ...EMPTY_DIAGRAM };
+      setCurrentDiagram(blank);
+      setHistory([blank]);
+      historyRef.current = [blank];
+      // undo/redo read the ref, not the state. Leaving it stale lets Ctrl+Z
+      // index past the end of the new one-item history and feed undefined into
+      // the canvas.
+      historyIndexRef.current = 0;
+      setHistoryIndex(0);
+      // `loadedScope` records which namespace this effect has settled, so it is
+      // set either way: leaving it behind on a failure would re-run the effect
+      // forever, and leaving it pointing at the *previous* account would let
+      // that account's library be overwritten with this one's empty arrays the
+      // moment the user switched back. Whether saving is allowed is a separate
+      // question, and `storageUnreadable` is what answers it.
+      setLoadedScope(storeScope);
+      setStorageUnreadable(!stored.ok);
+      if (!stored.ok) {
+        console.error(`Could not read local storage for ${storeScope}; saving is off so it is not overwritten.`);
+      }
+      setHasInitialized(true);
+    })();
+    return () => { cancelled = true; };
+  }, [storeScope, loadedScope]);
+
+  // --- Hand guest work to the account that signs in ---
+  // Work done signed out should follow you into your account, but only when
+  // doing so can't mix it into diagrams that are already there. So we adopt it
+  // only if this account has nothing of its own, and for Supporters only once
+  // the first cloud pull has told us whether the account is really empty.
+  // Otherwise the guest namespace is left untouched, and signing out returns to
+  // it intact.
+  useEffect(() => {
+    if (storeScope === null) return;
+    const decision = decideGuestAdoption({
+      pending: pendingGuestAdoption,
+      scopeReady: loadedScope === storeScope,
+      awaitingFirstPull,
+      firstPullFailed,
+      accountHasContent: graphs.length > 0 || projects.length > 0,
+    });
+    if (decision === 'wait') return;
+
+    // Settle the decision before awaiting anything, so this can't run twice and
+    // hand the same work over twice.
+    setPendingGuestAdoption(false);
+    // 'keep-separate': the account brought its own diagrams (pulled from the
+    // cloud), so the signed-out work stays where it is, ready for next time.
+    if (decision !== 'adopt') return;
+
+    // `pendingGuestAdoption` is already false by now, so on its own it no longer
+    // holds the auto-open effect back. Without this second flag that effect sees
+    // an empty library, creates a blank diagram and syncs it up, and the adopted
+    // graphs then replace it locally while the stray row stays in the cloud.
+    setAdoptingGuestWork(true);
+    // Deliberately no effect-scoped `cancelled` flag. Setting
+    // `pendingGuestAdoption` above re-runs this effect, which would trip such a
+    // flag immediately, and the copy is not conditional on this effect still
+    // being current: it moves the diagrams on disk either way.
+    const adoptingInto = storeScope;
+    void (async () => {
+      try {
+        const adopted = await adoptScope(GUEST_SCOPE, adoptingInto);
+        // null means the copy failed and the work is still in the guest
+        // namespace. Leave this account empty rather than showing diagrams that
+        // were not actually saved to it.
+        if (!adopted) return;
+        // Recorded, not published. Deciding here whether the namespace is still
+        // live means reading state this closure captured before the await, and
+        // every version of that check has been wrong in a way that ends with
+        // the adopted diagrams being overwritten by a blank one.
+        setPendingAdopted({ scope: adoptingInto, graphs: adopted.graphs, projects: adopted.projects });
+      } finally {
+        setAdoptingGuestWork(false);
+      }
+    })();
+  }, [pendingGuestAdoption, storeScope, loadedScope, awaitingFirstPull, firstPullFailed, graphs.length, projects.length]);
+
+  // Publish an adopted library once its namespace is the live one. Running as
+  // an effect is the point: it reads `storeScope` and `loadedScope` as they are
+  // now, not as they were when the copy started, and it waits rather than
+  // discarding. An account switch mid-copy therefore parks the diagrams here
+  // until that account is back, and if the switch away completed, the load
+  // effect clears this because its own read of the disk already has them.
+  useEffect(() => {
+    if (!pendingAdopted) return;
+    if (storeScope !== pendingAdopted.scope || loadedScope !== pendingAdopted.scope) return;
+    setGraphs(pendingAdopted.graphs);
+    setProjects(pendingAdopted.projects);
+    setPendingAdopted(null);
+  }, [pendingAdopted, storeScope, loadedScope]);
+
+  // Keep live refs in sync for dep-free callbacks (see applyRemote).
+  // Synced in effects rather than assigned during render: React may discard a
+  // render pass, and a ref written in the body would keep the value from that
+  // abandoned pass. Every reader below runs in an async callback after commit,
+  // so a one-commit lag is not observable.
+  useEffect(() => { activeGraphIdRef.current = activeGraphId; }, [activeGraphId]);
+  useEffect(() => { currentDiagramRef.current = currentDiagram; }, [currentDiagram]);
+  useEffect(() => { loadedScopeRef.current = loadedScope; }, [loadedScope]);
 
   // --- Auto-open most recent graph logic ---
   useEffect(() => {
@@ -195,10 +473,29 @@ export default function App() {
       historyRef.current = [mostRecent.diagramData];
       setHistoryIndex(0);
     } else if (graphs.length === 0) {
+      // Wait for the first cloud pull before assuming a Supporter has no graphs
+      //, otherwise we'd create a blank one and sync it up as clutter.
+      if (awaitingFirstPull) return;
+      // Likewise, don't create one while work done signed out is about to be
+      // handed to this account: that would leave a stray blank diagram beside it
+      // (and select it, since the graph below is chosen unconditionally).
+      // A failed pull leaves that decision unresolved indefinitely, so don't
+      // hold the editor hostage to it.
+      if (pendingGuestAdoption && !firstPullFailed) return;
+      // The copy itself is a bounded local operation, so once it is actually
+      // running, always wait for it: `firstPullFailed` says nothing about
+      // whether the diagrams are about to arrive.
+      if (adoptingGuestWork) return;
+      // Copy finished, waiting to be published into this namespace. Creating a
+      // blank graph in the gap would be saved over it. Scoped to this namespace
+      // on purpose: a handover parked for another account must not stop this
+      // one getting its starting diagram.
+      if (pendingAdopted && pendingAdopted.scope === storeScope) return;
       // Create new graph if none exist
       const newGraph: Graph = {
         id: generateId(),
         title: EMPTY_DIAGRAM.title,
+        titleSetByUser: false,
         caption: EMPTY_DIAGRAM.caption || 'Figure 1: Economic Diagram',
         messages: [],
         diagramData: { ...EMPTY_DIAGRAM },
@@ -217,26 +514,21 @@ export default function App() {
       historyRef.current = [newGraph.diagramData];
       setHistoryIndex(0);
     }
-  }, [view, hasInitialized, activeGraphId, graphs.length]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
+  }, [view, hasInitialized, activeGraphId, graphs.length, awaitingFirstPull, pendingGuestAdoption, adoptingGuestWork, pendingAdopted, storeScope, firstPullFailed]); // Use graphs.length instead of graphs to avoid re-trigger on content changes
 
   // --- Save to localStorage when data changes (only after initial load) ---
+  // Only write once the namespace in memory is the one we last loaded. During an
+  // account switch those differ for a render, and writing then would save the
+  // outgoing account's diagrams over the incoming account's.
   useEffect(() => {
-    if (!hasInitialized) return;
-    try {
-      localStorage.setItem(STORAGE_KEYS.graphs, JSON.stringify(graphs));
-    } catch (e) {
-      console.error('Failed to save graphs:', e);
-    }
-  }, [graphs, hasInitialized]);
+    if (!hasInitialized || storageUnreadable || loadedScope === null || loadedScope !== storeScope) return;
+    void writeGraphs(loadedScope, graphs);
+  }, [graphs, hasInitialized, storageUnreadable, loadedScope, storeScope]);
 
   useEffect(() => {
-    if (!hasInitialized) return;
-    try {
-      localStorage.setItem(STORAGE_KEYS.projects, JSON.stringify(projects));
-    } catch (e) {
-      console.error('Failed to save projects:', e);
-    }
-  }, [projects, hasInitialized]);
+    if (!hasInitialized || storageUnreadable || loadedScope === null || loadedScope !== storeScope) return;
+    void writeProjects(loadedScope, projects);
+  }, [projects, hasInitialized, storageUnreadable, loadedScope, storeScope]);
 
   useEffect(() => {
     if (!hasInitialized) return;
@@ -282,21 +574,66 @@ export default function App() {
   // Listen for browser back/forward navigation
   useEffect(() => {
     const handlePopState = () => {
-      const path = window.location.pathname;
-      if (path === '/home') setView('home');
-      else if (path === '/editor') setView('editor');
-      else if (path === '/settings') setView('settings');
-      else setView('landing');
+      const parsed = parsePath(window.location.pathname);
+      setView(parsed.view);
+      setSharedSlug(parsed.sharedSlug);
     };
 
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Scroll to bottom of chat
+  // Keep the document title and canonical URL in sync with the SPA route so
+  // content routes (/pricing, /compare) self-canonicalize instead of being
+  // seen as duplicates of the homepage's hardcoded canonical.
+  const countedFirstViewRef = useRef(false);
+  useEffect(() => {
+    const SITE = 'https://ib-econgraph-ai.vercel.app';
+    const meta: Record<string, { title: string; path: string }> = {
+      landing: { title: 'IB EconGraph AI: Free AI-Powered Economics Diagram Editor', path: '/' },
+      pricing: { title: 'Pricing · Free Forever · IB EconGraph AI', path: '/pricing' },
+      compare: { title: 'How IB EconGraph AI Compares: IB Economics Diagram Tools', path: '/compare' },
+      privacy: { title: 'Privacy Policy · IB EconGraph AI', path: '/privacy' },
+      terms: { title: 'Terms of Service · IB EconGraph AI', path: '/terms' },
+    };
+    // App-only views (home/editor/settings/shared) canonicalize to the homepage.
+    const entry = meta[view] ?? { title: 'IB EconGraph AI: Free Economics Diagram Editor', path: '/' };
+    document.title = entry.title;
+    let link = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'canonical';
+      document.head.appendChild(link);
+    }
+    link.href = SITE + entry.path;
+
+    // GoatCounter counts the first load itself (the tag in index.html), so only
+    // report navigations after that, otherwise every visit double-counts its
+    // entry page. Views with no metadata entry are app UI rather than content;
+    // report the real path for those, minus any share slug, which is a
+    // capability token and must not reach an analytics endpoint.
+    if (!countedFirstViewRef.current) {
+      countedFirstViewRef.current = true;
+      return;
+    }
+    const countedPath = meta[view]
+      ? entry.path
+      : window.location.pathname.replace(/^\/s\/[^/]+\/?$/, '/s/');
+    // Optional chaining throughout: the tag is `async`, so on a fast navigation
+    // it may not have loaded yet. A missed count is fine; a crash is not.
+    const gc = (window as unknown as {
+      goatcounter?: { count?: (opts: { path: string; title: string }) => void };
+    }).goatcounter;
+    gc?.count?.({ path: countedPath, title: entry.title });
+  }, [view]);
+
+  // Scroll the chat to the bottom when a message is added to the open graph (or
+  // when switching graphs), not on every diagram edit, which also mutates
+  // `graphs` but leaves the message list unchanged.
+  const activeMessageCount = graphs.find(g => g.id === activeGraphId)?.messages.length ?? 0;
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [graphs, activeGraphId]);
+  }, [activeMessageCount, activeGraphId]);
 
   // Cleanup on unmount
   useEffect(() => () => {
@@ -326,13 +663,34 @@ export default function App() {
     historyDebounceRef.current = window.setTimeout(() => pushToHistory(data), 250);
   }, [pushToHistory]);
 
-  const scheduleAutosave = useCallback((data: DiagramData) => {
+  /**
+   * `fromCanvasEdit` distinguishes a direct edit on the canvas from the other
+   * callers (undo/redo, clear, restoring an older version or a chat message).
+   * Only a direct edit can mean the user retitled the graph; the rest replay a
+   * title that was already chosen for them, and treating those as a rename
+   * would freeze the title against future AI generations.
+   */
+  const scheduleAutosave = useCallback((data: DiagramData, fromCanvasEdit = false) => {
     if (!activeGraphId) return;
     if (autosaveDebounceRef.current) window.clearTimeout(autosaveDebounceRef.current);
     autosaveDebounceRef.current = window.setTimeout(() => {
+      // Clear the handle first: applyRemote reads this ref to mean "unsaved
+      // edits are in flight, don't overwrite the canvas". Left set, it stays
+      // true forever after the first autosave and cross-device pulls silently
+      // stop refreshing the open diagram.
+      autosaveDebounceRef.current = null;
       setGraphs(prev => prev.map(g =>
         g.id === activeGraphId
-          ? { ...g, diagramData: data, title: data.title, lastModified: Date.now() }
+          ? {
+            ...g,
+            diagramData: data,
+            title: data.title,
+            // Editing the title directly on the canvas counts as naming it.
+            // Only a real change flips this; ordinary canvas edits carry the
+            // existing title through unchanged.
+            titleSetByUser: g.titleSetByUser || (fromCanvasEdit && data.title !== g.title),
+            lastModified: Date.now(),
+          }
           : g
       ));
     }, 200);
@@ -341,7 +699,7 @@ export default function App() {
   const handleDataChange = useCallback((newData: DiagramData) => {
     setCurrentDiagram(newData);
     scheduleHistoryPush(newData);
-    scheduleAutosave(newData);
+    scheduleAutosave(newData, true);
   }, [scheduleHistoryPush, scheduleAutosave]);
 
   const undo = useCallback(() => {
@@ -412,6 +770,7 @@ export default function App() {
     const newGraph: Graph = {
       id: generateId(),
       title: EMPTY_DIAGRAM.title,
+      titleSetByUser: false,
       caption: EMPTY_DIAGRAM.caption || 'Figure 1: Economic Diagram',
       projectId,
       messages: [],
@@ -444,6 +803,7 @@ export default function App() {
       danger: true,
       onConfirm: () => {
         setGraphs(prev => prev.filter(g => g.id !== graphId));
+        recordTombstones('graphs', [graphId]);
         if (activeGraphId === graphId) {
           setActiveGraphId(null);
           navigateToView('home');
@@ -457,6 +817,7 @@ export default function App() {
   // (Used for bulk delete where HomePage shows the confirmation)
   const deleteGraphsDirect = useCallback((graphIds: string[]) => {
     setGraphs(prev => prev.filter(g => !graphIds.includes(g.id)));
+    recordTombstones('graphs', graphIds);
     // If active graph is being deleted, go to home
     if (activeGraphId && graphIds.includes(activeGraphId)) {
       setActiveGraphId(null);
@@ -497,9 +858,10 @@ export default function App() {
       danger: true,
       onConfirm: () => {
         setProjects(prev => prev.filter(p => p.id !== projectId));
+        recordTombstones('projects', [projectId]);
         // Unassign graphs from this project
         setGraphs(prev => prev.map(g =>
-          g.projectId === projectId ? { ...g, projectId: undefined } : g
+          g.projectId === projectId ? { ...g, projectId: undefined, lastModified: Date.now() } : g
         ));
         setConfirmModal(c => ({ ...c, visible: false }));
       }
@@ -541,6 +903,7 @@ export default function App() {
             g.id === graphId ? {
               ...g,
               title: newName.trim(),
+              titleSetByUser: true,
               diagramData: { ...g.diagramData, title: newName.trim() },
               lastModified: Date.now()
             } : g
@@ -558,9 +921,58 @@ export default function App() {
     ));
   }, []);
 
-  const handleImportData = useCallback((data: { graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] }) => {
-    setGraphs(data.graphs);
-    setProjects(data.projects);
+  const handleImportData = useCallback(async (data: { graphs: Graph[]; projects: Project[]; specialColors?: string[]; standardColors?: string[] }) => {
+    // Import replaces everything, tombstone current items missing from the
+    // backup so cloud sync propagates the replacement instead of undoing it.
+    // Bind the restore to the namespace it started in. Signing in or out during
+    // the cloud read below would otherwise drop this backup, and the deletions
+    // that come with it, into whichever account happens to be live by then.
+    const startedIn = loadedScopeRef.current;
+
+    const importedGraphIds = new Set(data.graphs.map(g => g.id));
+    const importedProjectIds = new Set(data.projects.map(p => p.id));
+    const graphTombstones = graphs.filter(g => !importedGraphIds.has(g.id)).map(g => g.id);
+    const projectTombstones = projects.filter(p => !importedProjectIds.has(p.id)).map(p => p.id);
+
+    // Cloud rows that live only on another device were never in local `graphs`,
+    // so the filter above can't tombstone them, without this, the next sync
+    // pulls them back and the "replace everything" restore silently resurrects
+    // diagrams the backup was meant to drop. Best-effort: null when offline.
+    //
+    // This has to finish BEFORE the imported state is published: publishing
+    // schedules a sync, and a sync that runs while these tombstones are still
+    // missing merges the remote-only rows straight back in.
+    const cloud = await fetchCloudIds();
+
+    // Nothing above this point has written anything, so abandoning here leaves
+    // no trace in either account.
+    if (loadedScopeRef.current !== startedIn) {
+      setConfirmModal({
+        visible: true,
+        title: 'Restore cancelled',
+        message: 'The account changed while the backup was being restored, so nothing was imported. Please try again.',
+        confirmText: 'OK',
+        danger: false,
+        onConfirm: () => setConfirmModal(c => ({ ...c, visible: false })),
+      });
+      return;
+    }
+
+    if (cloud) {
+      graphTombstones.push(...cloud.graphIds.filter(id => !importedGraphIds.has(id)));
+      projectTombstones.push(...cloud.projectIds.filter(id => !importedProjectIds.has(id)));
+    }
+    recordTombstones('graphs', graphTombstones);
+    recordTombstones('projects', projectTombstones);
+
+    // Restored items must win last-write-wins against any wiped/tombstoned
+    // remote rows, and must not collide with a stale tombstone of the same id.
+    // Stamped after the await so they are newer than every tombstone above.
+    const now = Date.now();
+    clearTombstones('graphs', data.graphs.map(g => g.id));
+    clearTombstones('projects', data.projects.map(p => p.id));
+    setGraphs(data.graphs.map(g => ({ ...g, lastModified: now })));
+    setProjects(data.projects.map(p => ({ ...p, lastModified: now })));
     if (data.specialColors && Array.isArray(data.specialColors) && data.specialColors.length >= 2) {
       setSpecialColors(data.specialColors);
     }
@@ -569,7 +981,7 @@ export default function App() {
     }
     // Reset active graph since the data has changed
     setActiveGraphId(null);
-  }, []);
+  }, [graphs, projects]);
 
   const startFromHome = useCallback((projectId?: string) => {
     const graphId = createGraph(projectId);
@@ -585,6 +997,22 @@ export default function App() {
     () => graphs.find(g => g.id === activeGraphId) || null,
     [graphs, activeGraphId]
   );
+
+  /**
+   * A share stores a snapshot of `graph.diagramData`, but that field trails the
+   * canvas by the autosave debounce. Creating a link straight after an edit
+   * would publish the pre-edit diagram, so hand the share the live canvas.
+   */
+  const shareGraph = useMemo(
+    () => (activeGraph ? { ...activeGraph, diagramData: currentDiagram, title: currentDiagram.title } : null),
+    [activeGraph, currentDiagram]
+  );
+
+  // Latest graphs, readable from async callbacks that would otherwise close
+  // over the snapshot taken before an `await` (e.g. a rename the user makes
+  // while a generation is still in flight).
+  const graphsRef = useRef(graphs);
+  useEffect(() => { graphsRef.current = graphs; }, [graphs]);
 
   const projectGraphs = useMemo(() => {
     if (!activeGraph) return [];
@@ -602,17 +1030,38 @@ export default function App() {
     [activeGraph, projects]
   );
 
+  // Single source of truth for AI-availability gating, shared by the chat
+  // submit guard and the editor warning banner so the two can't drift. Reads
+  // getAIProvider()/hasApiKey() fresh each call to reflect the latest settings.
+  const computeAiGate = useCallback((): AiGate => {
+    if (getAIProvider() === 'hosted') {
+      if (!user) return 'hosted-signin';
+      if (!isPro) return 'hosted-upgrade';
+      return null;
+    }
+    return hasApiKey() ? null : 'byok-nokey';
+  }, [user, isPro]);
+
   const handleSubmit = useCallback(async (e?: React.FormEvent, customPrompt?: string) => {
     if (e) e.preventDefault();
     const promptText = customPrompt || prompt;
     if (!promptText.trim() || !activeGraphId) return;
 
-    // Check for API key before sending
-    if (!hasApiKey()) {
+    // Check the AI provider is usable before sending
+    const gate = computeAiGate();
+    const aiBlockedMessage =
+      gate === 'hosted-signin'
+        ? 'Sign in (Settings > Account) to use hosted AI, or switch to a free provider with your own API key.'
+        : gate === 'hosted-upgrade'
+          ? 'Hosted AI is part of the Supporter plan. Upgrade on the Pricing page, or use your own free API key in Settings.'
+          : gate === 'byok-nokey'
+            ? 'API key not configured. Please add your API key in Settings before using AI features.'
+            : null;
+    if (aiBlockedMessage) {
       const errorMsg: Message = {
         id: generateId(),
         role: 'model',
-        content: "API key not configured. Please add your API key in Settings before using AI features.",
+        content: aiBlockedMessage,
         timestamp: Date.now()
       };
       setGraphs(prev => prev.map(g => {
@@ -649,11 +1098,27 @@ export default function App() {
       const history = activeGraph?.messages.map(m => `${m.role}: ${m.content}`) || [];
       const result = await generateDiagramData(promptText, history);
 
+      // Once the user has named the graph, that name is theirs and a later
+      // generation must not silently overwrite it. This keys off an explicit
+      // flag rather than the title itself: inferring it from "title differs
+      // from the default" locked the graph to whatever the *first* generation
+      // called it, because that generation writes its title back below.
+      // Read the graph as it is *now*, not as it was when the request was sent,
+      // so a rename made while this was generating still wins.
+      const liveGraph = graphsRef.current.find(g => g.id === activeGraphId) || null;
+      const userNamed = !!liveGraph && (
+        liveGraph.titleSetByUser
+        // Graphs saved before the flag existed: fall back to the old heuristic
+        // so an existing hand-picked title is never overwritten.
+        ?? (liveGraph.title.trim() !== '' && liveGraph.title !== EMPTY_DIAGRAM.title)
+      );
+      const nextDiagram = userNamed ? { ...result, title: liveGraph!.title } : result;
+
       const aiMsg: Message = {
         id: generateId(),
         role: 'model',
         content: `Here is the diagram for "${promptText}". You can drag points to adjust curves or double click labels to edit them.`,
-        diagramData: result,
+        diagramData: nextDiagram,
         timestamp: Date.now()
       };
 
@@ -662,15 +1127,15 @@ export default function App() {
           return {
             ...g,
             messages: [...g.messages, aiMsg],
-            diagramData: result,
-            title: result.title,
+            diagramData: nextDiagram,
+            title: nextDiagram.title,
             lastModified: Date.now()
           };
         }
         return g;
       }));
-      setCurrentDiagram(result);
-      pushToHistory(result);
+      setCurrentDiagram(nextDiagram);
+      pushToHistory(nextDiagram);
 
     } catch (err) {
       const message = err instanceof Error
@@ -691,7 +1156,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeGraphId, activeGraph, prompt, pushToHistory, setGraphs]);
+  }, [activeGraphId, activeGraph, prompt, pushToHistory, setGraphs, computeAiGate]);
 
   const handleNewChat = useCallback(() => {
     if (!activeGraphId) return;
@@ -815,6 +1280,14 @@ export default function App() {
       newData.annotatedPoints = [...newData.annotatedPoints, ...newPoints];
     }
 
+    if (template.data.textLabels && template.data.textLabels.length > 0) {
+      const newLabels = template.data.textLabels.map(l => ({
+        ...l,
+        id: `label-${generateId()}`
+      }));
+      newData.textLabels = [...(newData.textLabels ?? []), ...newLabels];
+    }
+
     handleDataChange(newData);
   };
 
@@ -883,11 +1356,76 @@ export default function App() {
     "Perfect Competition Long Run"
   ];
 
+  // Provider-aware AI availability (drives the editor warning banner). Uses the
+  // same computeAiGate() discriminant as the chat submit guard above.
+  const aiGate = computeAiGate();
+  const aiWarning: { title: string; body: React.ReactNode } | null =
+    aiGate === 'hosted-signin'
+      ? {
+        title: 'Sign in to use hosted AI',
+        body: <>Hosted AI needs an account. Sign in from{' '}
+          <button onClick={() => navigateToView('settings')} className="underline font-medium hover:text-amber-800">Settings</button>
+          {' '}or switch to a free provider with your own key.</>
+      }
+      : aiGate === 'hosted-upgrade'
+        ? {
+          title: 'Hosted AI is a Supporter feature',
+          body: <>See the{' '}
+            <button onClick={() => navigateToView('pricing')} className="underline font-medium hover:text-amber-800">Supporter plan</button>
+            , or keep generating free with your own key in{' '}
+            <button onClick={() => navigateToView('settings')} className="underline font-medium hover:text-amber-800">Settings</button>.</>
+        }
+        : aiGate === 'byok-nokey'
+          ? {
+            title: 'API key not configured',
+            body: <>Add your API key in{' '}
+              <button onClick={() => navigateToView('settings')} className="underline font-medium hover:text-amber-800">Settings</button>
+              {' '}to use AI features.</>
+          }
+          : null;
+
   // --- Render Views ---
+  if (view === 'shared' && sharedSlug) {
+    return (
+      <SharedViewPage
+        slug={sharedSlug}
+        onGoHome={() => navigateToView('landing')}
+      />
+    );
+  }
+
+  if (view === 'pricing') {
+    return (
+      <PricingPage
+        onOpenEditor={() => navigateToView('home')}
+        onOpenLanding={() => navigateToView('landing')}
+        onOpenCompare={() => navigateToView('compare')}
+        onOpenSettings={() => navigateToView('settings')}
+      />
+    );
+  }
+
+  if (view === 'compare') {
+    return (
+      <ComparePage
+        onOpenEditor={() => navigateToView('home')}
+        onOpenLanding={() => navigateToView('landing')}
+        onOpenPricing={() => navigateToView('pricing')}
+      />
+    );
+  }
+
+  if (view === 'privacy') return <PrivacyPage />;
+  if (view === 'terms') return <TermsPage />;
+
   if (view === 'landing') {
     return (
       <LandingPage
         onGoHome={() => navigateToView('home')}
+        onOpenPricing={() => navigateToView('pricing')}
+        onOpenCompare={() => navigateToView('compare')}
+        onOpenPrivacy={() => navigateToView('privacy')}
+        onOpenTerms={() => navigateToView('terms')}
       />
     );
   }
@@ -938,6 +1476,9 @@ export default function App() {
         graphs={graphs}
         projects={projects}
         onImportData={handleImportData}
+        syncState={syncState}
+        onSyncNow={syncNow}
+        onOpenPricing={() => navigateToView('pricing')}
       />
     );
   }
@@ -945,6 +1486,15 @@ export default function App() {
   // Editor View
   return (
     <>
+      {storageUnreadable && (
+        <div
+          role="alert"
+          className="fixed inset-x-0 top-0 z-[100] bg-red-600 px-4 py-2 text-center text-sm font-medium text-white"
+        >
+          Your saved diagrams could not be read from this browser. Saving is turned off so nothing is overwritten. Reload the page to try again.
+        </div>
+      )}
+
       {/* Modals */}
       <PromptModal
         isOpen={promptModal.visible}
@@ -981,6 +1531,23 @@ export default function App() {
         svgUrl={downloadUrl}
         title={currentDiagram.title}
         description={currentDiagram.summary}
+      />
+      <ShareModal
+        isOpen={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        graph={shareGraph}
+        onOpenSettings={() => navigateToView('settings')}
+        onOpenPricing={() => navigateToView('pricing')}
+      />
+      <CloudHistoryModal
+        isOpen={cloudHistoryOpen}
+        onClose={() => setCloudHistoryOpen(false)}
+        graph={activeGraph}
+        onRestore={(diagramData) => {
+          setCurrentDiagram(diagramData);
+          pushToHistory(diagramData);
+          scheduleAutosave(diagramData);
+        }}
       />
 
       <div className="flex h-screen w-full bg-gray-50 text-gray-900 overflow-hidden font-sans">
@@ -1091,6 +1658,25 @@ export default function App() {
               </button>
             </div>
             <div className="flex items-center gap-2">
+              {cloudConfigured && (
+                <>
+                  <button
+                    onClick={() => setCloudHistoryOpen(true)}
+                    title="Cloud version history"
+                    className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <CloudDownload className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setShareModalOpen(true)}
+                    title="Share a view-only link"
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md border border-gray-300"
+                  >
+                    <Share2 className="w-4 h-4" />
+                    <span className="hidden md:inline">Share</span>
+                  </button>
+                </>
+              )}
               <button
                 onClick={() => navigateToView('settings')}
                 className="p-2 text-gray-500 hover:bg-gray-100 rounded-lg transition-colors"
@@ -1129,6 +1715,7 @@ export default function App() {
               isOpen={isComponentLibraryOpen}
               onClose={() => setComponentLibraryOpen(false)}
               onAddComponent={handleAddComponent}
+              currentDiagram={currentDiagram}
             />
 
             {/* Center: Graph Canvas */}
@@ -1213,22 +1800,13 @@ export default function App() {
             >
               {isAIPanelOpen && (
                 <>
-                  {/* API Key Warning */}
-                  {!hasApiKey() && (
+                  {/* AI availability warning */}
+                  {aiWarning && (
                     <div className="px-4 py-3 bg-amber-50 border-b border-amber-200 flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                       <div>
-                        <p className="text-sm text-amber-800 font-medium">API key not configured</p>
-                        <p className="text-xs text-amber-600 mt-0.5">
-                          Add your API key in{' '}
-                          <button
-                            onClick={() => navigateToView('settings')}
-                            className="underline font-medium hover:text-amber-800"
-                          >
-                            Settings
-                          </button>{' '}
-                          to use AI features.
-                        </p>
+                        <p className="text-sm text-amber-800 font-medium">{aiWarning.title}</p>
+                        <p className="text-xs text-amber-600 mt-0.5">{aiWarning.body}</p>
                       </div>
                     </div>
                   )}

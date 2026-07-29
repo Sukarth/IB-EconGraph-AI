@@ -1,16 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     TrendingDown, TrendingUp, Activity, Minus, ArrowDownRight, ArrowUp,
     Triangle, AlertTriangle, Square, Target, Circle, BarChart2, Crown, Receipt,
-    ChevronDown, ChevronRight, Search, Plus, X, Package
+    ChevronDown, ChevronRight, Search, Plus, X, Package, Star, Trash2, Loader2, BookmarkPlus
 } from 'lucide-react';
-import { ComponentTemplate, COMPONENT_TEMPLATES } from '../types';
+import { ComponentTemplate, COMPONENT_TEMPLATES, DiagramData } from '../types';
+import { ConfirmModal } from './Modal';
 import { usePortalTooltip } from './usePortalTooltip';
+import { useAuth } from '../services/auth';
+import {
+    CustomTemplate, listCachedTemplates, fetchCustomTemplates,
+    saveCustomTemplate, deleteCustomTemplate, templateDataFromDiagram,
+} from '../services/customTemplates';
 
 export interface ComponentLibraryProps {
     onAddComponent: (template: ComponentTemplate) => void;
     isOpen: boolean;
     onClose: () => void;
+    currentDiagram: DiagramData;
 }
 
 const iconMap: Record<string, React.ReactNode> = {
@@ -41,13 +48,100 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
     onAddComponent,
     isOpen,
     onClose,
+    currentDiagram,
 }) => {
     const [searchTerm, setSearchTerm] = useState('');
-    const [expandedCategories, setExpandedCategories] = useState<string[]>(['curves', 'areas', 'points', 'complete']);
+    const [expandedCategories, setExpandedCategories] = useState<string[]>(['custom', 'curves', 'areas', 'points', 'complete']);
 
     const { showTooltip, hideTooltip, TooltipPortal } = usePortalTooltip({ delay: 400, placement: 'left' });
 
+    // ── Custom templates (Supporter feature, synced) ──
+    const { configured: cloudConfigured, user, isPro } = useAuth();
+    const [customTemplates, setCustomTemplates] = useState<CustomTemplate[]>([]);
+    const [showSaveForm, setShowSaveForm] = useState(false);
+    const [saveName, setSaveName] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    // Template awaiting delete confirmation (null when the dialog is closed).
+    const [pendingDelete, setPendingDelete] = useState<CustomTemplate | null>(null);
+
+    // Only ever show templates belonging to the signed-in user; clear when
+    // signed out so a previous user's cache never leaks on a shared browser.
+    useEffect(() => {
+        if (!user) {
+            setCustomTemplates([]);
+            return;
+        }
+        setCustomTemplates(listCachedTemplates(user.id));
+        if (isOpen && isPro) {
+            // Drop a response that lands after sign-out or an account switch,
+            // which would otherwise repopulate the library from the old account.
+            let cancelled = false;
+            fetchCustomTemplates(user.id).then((t) => { if (!cancelled) setCustomTemplates(t); });
+            return () => { cancelled = true; };
+        }
+    }, [isOpen, user, isPro]);
+
     if (!isOpen) return null;
+
+    const handleSaveTemplate = async () => {
+        // The button is disabled for these, but Enter in the name field calls
+        // this directly, so repeated presses could create duplicate templates.
+        if (saving || !saveName.trim()) return;
+        if (!user) {
+            setSaveError('Sign in (Settings) to save templates.');
+            return;
+        }
+        setSaving(true);
+        setSaveError(null);
+        const result = await saveCustomTemplate(user.id, {
+            name: saveName,
+            data: templateDataFromDiagram(currentDiagram),
+        });
+        setSaving(false);
+        if (result.error) {
+            setSaveError(result.error);
+        } else if (result.template) {
+            setCustomTemplates(prev => [result.template!, ...prev]);
+            setShowSaveForm(false);
+            setSaveName('');
+        }
+    };
+
+    const handleDeleteTemplate = async (id: string) => {
+        if (!user) return;
+        const prevList = customTemplates;
+        setCustomTemplates(prev => prev.filter(t => t.id !== id));
+        const { error } = await deleteCustomTemplate(user.id, id);
+        if (error) {
+            setCustomTemplates(prevList); // roll back the optimistic removal
+            setSaveError(error);
+        }
+    };
+
+    // Deleting a synced template removes it from every device, so confirm first
+    // (same pattern as the destructive actions in Settings).
+    const confirmDeleteTemplate = () => {
+        if (!pendingDelete) return;
+        handleDeleteTemplate(pendingDelete.id);
+        setPendingDelete(null);
+    };
+
+    const addCustomTemplate = (t: CustomTemplate) => {
+        onAddComponent({
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            category: 'complete',
+            icon: 'Star',
+            data: t.data,
+        });
+    };
+
+    const filteredCustom = customTemplates.filter(
+        t => t.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            t.description.toLowerCase().includes(searchTerm.toLowerCase())
+    );
 
     const toggleCategory = (category: string) => {
         setExpandedCategories(prev =>
@@ -100,6 +194,122 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
 
             {/* Component List */}
             <div className="flex-1 overflow-y-auto p-2">
+                {/* My Templates (Supporter) */}
+                {cloudConfigured && (
+                    <div className="mb-2">
+                        <button
+                            onClick={() => toggleCategory('custom')}
+                            className="w-full flex items-center gap-2 p-2 rounded-lg text-sm font-medium transition-colors text-indigo-600 bg-indigo-50"
+                        >
+                            {expandedCategories.includes('custom') ? (
+                                <ChevronDown className="w-4 h-4" />
+                            ) : (
+                                <ChevronRight className="w-4 h-4" />
+                            )}
+                            My Templates
+                            <span className="ml-auto text-xs opacity-60">{filteredCustom.length}</span>
+                        </button>
+
+                        {expandedCategories.includes('custom') && (
+                            <div className="mt-1 space-y-1">
+                                {showSaveForm ? (
+                                    <div className="p-2 border border-indigo-100 rounded-lg bg-indigo-50/50 space-y-2">
+                                        <input
+                                            value={saveName}
+                                            onChange={(e) => setSaveName(e.target.value)}
+                                            onKeyDown={(e) => { if (e.key === 'Enter') handleSaveTemplate(); }}
+                                            placeholder="Template name…"
+                                            autoFocus
+                                            className="w-full px-2.5 py-1.5 text-sm border border-gray-200 rounded-md focus:border-indigo-400 focus:ring-1 focus:ring-indigo-100 outline-none"
+                                        />
+                                        <div className="flex items-center gap-2">
+                                            <button
+                                                onClick={handleSaveTemplate}
+                                                disabled={saving || !saveName.trim()}
+                                                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium bg-indigo-600 text-white rounded-md hover:bg-indigo-700 disabled:bg-gray-300 transition-colors"
+                                            >
+                                                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Save'}
+                                            </button>
+                                            <button
+                                                onClick={() => { setShowSaveForm(false); setSaveError(null); }}
+                                                className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-700"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <button
+                                        onClick={() => setShowSaveForm(true)}
+                                        className="w-full flex items-center gap-2 p-2 rounded-lg text-xs font-medium text-indigo-600 border border-dashed border-indigo-200 hover:bg-indigo-50 transition-colors"
+                                    >
+                                        <BookmarkPlus className="w-3.5 h-3.5" />
+                                        Save current diagram as template
+                                    </button>
+                                )}
+
+                                {/* Errors from save OR delete show regardless of form state */}
+                                {saveError && <p className="text-xs text-red-600 px-1">{saveError}</p>}
+
+                                {filteredCustom.map((t) => (
+                                    // Not a <button>: it contains the delete button, and
+                                    // nesting interactive elements is invalid. role +
+                                    // tabIndex + a key handler give it the same behaviour.
+                                    <div
+                                        key={t.id}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-label={`Add template ${t.name}`}
+                                        className="group flex items-center gap-3 p-2 rounded-lg hover:bg-gray-50 border border-transparent hover:border-gray-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 transition-all cursor-pointer"
+                                        onClick={() => addCustomTemplate(t)}
+                                        onKeyDown={(e) => {
+                                            // Only keys pressed on the row itself. The nested
+                                            // delete button stops click propagation but keydown
+                                            // still bubbles, so without this, deleting from the
+                                            // keyboard also added the template.
+                                            if (e.target !== e.currentTarget) return;
+                                            if (e.key === 'Enter' || e.key === ' ') {
+                                                e.preventDefault(); // Space would scroll the panel
+                                                addCustomTemplate(t);
+                                            }
+                                        }}
+                                    >
+                                        <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-indigo-100 text-indigo-600">
+                                            <Star className="w-4 h-4" />
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <h4 className="text-sm font-medium text-gray-800 truncate">{t.name}</h4>
+                                            <p className="text-xs text-gray-500 truncate">
+                                                {t.description || new Date(t.createdAt).toLocaleDateString()}
+                                            </p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-label={`Delete template ${t.name}`}
+                                            onClick={(e) => { e.stopPropagation(); setPendingDelete(t); }}
+                                            onMouseEnter={(e) => showTooltip(e.currentTarget, 'Delete template')}
+                                            onMouseLeave={hideTooltip}
+                                            // focus-visible:opacity-100 so it doesn't stay
+                                            // invisible when reached by keyboard.
+                                            className="p-1.5 rounded-md text-gray-400 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-red-50 hover:text-red-600"
+                                        >
+                                            <Trash2 className="w-3 h-3" />
+                                        </button>
+                                    </div>
+                                ))}
+
+                                {filteredCustom.length === 0 && !showSaveForm && (
+                                    <p className="text-xs text-gray-400 px-2 py-1">
+                                        {user && isPro
+                                            ? 'No templates yet, save your favourite curve setups.'
+                                            : 'Save & sync your own templates with the Supporter plan.'}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {Object.entries(categoryLabels).map(([category, { label, color }]) => {
                     const templates = groupedTemplates[category];
                     if (!templates || templates.length === 0) return null;
@@ -153,6 +363,16 @@ const ComponentLibrary: React.FC<ComponentLibraryProps> = ({
                 </p>
             </div>
             <TooltipPortal />
+
+            <ConfirmModal
+                isOpen={pendingDelete !== null}
+                onClose={() => setPendingDelete(null)}
+                onConfirm={confirmDeleteTemplate}
+                title="Delete Template"
+                message={`Delete the template "${pendingDelete?.name ?? ''}"? It will be removed from your library on all your devices. This can't be undone.`}
+                confirmText="Delete"
+                variant="danger"
+            />
         </div>
     );
 };

@@ -30,6 +30,11 @@ const LINE_HIT_TOLERANCE = 8;
 const FormattedText = ({ text, x, y, className, textAnchor = "middle", dominantBaseline, style, ...props }: any) => {
     const parts = useMemo(() => {
         const tokens: { type: string; content: string }[] = [];
+        // Labels are required by the generation schema but not guaranteed by it:
+        // OpenRouter has no schema, and a diagram can also be hand-edited or
+        // predate a field. Rendering nothing beats taking the canvas down with
+        // a `length of undefined` on the whole diagram.
+        if (typeof text !== 'string') return tokens;
         let i = 0;
         while (i < text.length) {
             const char = text[i];

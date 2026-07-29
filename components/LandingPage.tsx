@@ -20,7 +20,35 @@ import {
 
 export interface LandingPageProps {
     onGoHome: () => void;
+    onOpenPricing: () => void;
+    onOpenCompare: () => void;
+    onOpenPrivacy: () => void;
+    onOpenTerms: () => void;
 }
+
+/**
+ * Footer legal link. Stays a real `<a>` so it is crawlable, middle-clickable
+ * and shows its target on hover, but a plain left click routes through the SPA
+ * instead of reloading the whole bundle. Modifier clicks are left to the
+ * browser.
+ */
+const RouteLink: React.FC<{ href: string; onNavigate: () => void; children: React.ReactNode }> = ({
+    href,
+    onNavigate,
+    children,
+}) => (
+    <a
+        href={href}
+        onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            e.preventDefault();
+            onNavigate();
+        }}
+        className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
+    >
+        {children}
+    </a>
+);
 
 // ─── Fade-in on scroll component ───
 const ScrollReveal: React.FC<{
@@ -71,7 +99,7 @@ const ScrollReveal: React.FC<{
     );
 };
 
-const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
+const LandingPage: React.FC<LandingPageProps> = ({ onGoHome, onOpenPricing, onOpenCompare, onOpenPrivacy, onOpenTerms }) => {
     const [scrollY, setScrollY] = useState(0);
     const [heroTilt, setHeroTilt] = useState({ rotateX: 0, rotateY: 0 });
     const [openSourceMouse, setOpenSourceMouse] = useState({ x: 50, y: 50 });
@@ -194,6 +222,18 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                         </span>
                     </div>
                     <div className="flex items-center gap-3">
+                        <button
+                            onClick={onOpenPricing}
+                            className="hidden md:block text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors px-2"
+                        >
+                            Pricing
+                        </button>
+                        <button
+                            onClick={onOpenCompare}
+                            className="hidden md:block text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors px-2"
+                        >
+                            Compare
+                        </button>
                         <a
                             href="https://github.com/sukarth/IB-EconGraph-AI"
                             target="_blank"
@@ -255,9 +295,9 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                                     <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                                 </button>
                             </div>
-                            <p className="text-sm text-gray-400 mt-5 flex items-center justify-center gap-1.5">
+                            <p className="text-sm text-gray-500 mt-5 flex items-center justify-center gap-1.5">
                                 <Heart className="w-3.5 h-3.5 text-rose-400" />
-                                Free & open source forever. No account required.
+                                Everything a student needs to finish their IA is free and unlimited, forever.
                             </p>
                         </ScrollReveal>
                     </div>
@@ -396,7 +436,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                                         <span className="text-blue-400">Community Driven.</span>
                                     </h2>
                                     <p className="text-slate-300 text-lg leading-relaxed mb-8">
-                                        IB EconGraph AI is fully open source under the MIT License. Inspect the code,
+                                        IB EconGraph AI is fully open source under the GNU AGPL v3. Inspect the code,
                                         contribute features, report bugs, or fork it for your own needs.
                                         Built by students, for students.
                                     </p>
@@ -419,7 +459,23 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                                             <Star className="w-4 h-4 fill-amber-400 text-amber-400" />
                                             Star the Repo
                                         </a>
+                                        <a
+                                            href="https://ko-fi.com/sukarth"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="inline-flex items-center gap-2 bg-white/10 text-white px-5 py-2.5 rounded-lg text-sm font-semibold hover:bg-white/20 transition-colors border border-white/10"
+                                        >
+                                            <Heart className="w-4 h-4 fill-rose-400 text-rose-400" />
+                                            Support the Project
+                                        </a>
                                     </div>
+                                    <p className="text-slate-400 text-sm mt-5">
+                                        Sponsorships and the{' '}
+                                        <button onClick={onOpenPricing} className="text-blue-400 hover:text-blue-300 underline">
+                                            Supporter plan
+                                        </button>{' '}
+                                        keep this tool free for every student. Thank you.
+                                    </p>
                                 </div>
                                 <div className="flex gap-8 md:gap-10 text-center shrink-0">
                                     <div>
@@ -427,7 +483,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                                         <div className="text-slate-400 text-sm mt-1">Free</div>
                                     </div>
                                     <div>
-                                        <div className="text-3xl md:text-4xl font-bold text-white">MIT</div>
+                                        <div className="text-3xl md:text-4xl font-bold text-white">AGPL</div>
                                         <div className="text-slate-400 text-sm mt-1">License</div>
                                     </div>
                                     <div>
@@ -623,7 +679,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                         </h2>
                         <p className="text-lg text-gray-500 max-w-3xl mx-auto mb-14 leading-relaxed">
                             Whether you&apos;re preparing for Paper 1, working on your Internal Assessment,
-                            or studying for exams &mdash; IB EconGraph AI helps you create the exact diagrams
+                            or studying for exams, IB EconGraph AI helps you create the exact diagrams
                             your IB Economics course demands, from microeconomics to international trade.
                         </p>
                         <div className="grid sm:grid-cols-3 gap-6">
@@ -643,7 +699,7 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                                 {
                                     icon: <GraduationCap className="w-6 h-6" />,
                                     title: 'Full IB Curriculum',
-                                    desc: 'Covers all IB Economics topics — micro, macro, international, and development economics.',
+                                    desc: 'Covers all the IB Economics topics: micro, macro, international and development economics.',
                                     color: 'text-amber-600 bg-amber-100',
                                 },
                             ].map((item, i) => (
@@ -701,21 +757,44 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGoHome }) => {
                         </div>
                         <span className="font-semibold text-gray-900">IB EconGraph AI</span>
                     </div>
-                    <p className="text-sm text-gray-400">
+                    <p className="text-sm text-gray-500">
                         Free & open source. Built for IB Economics students and educators.
                     </p>
-                    <div className="flex items-center gap-4">
+                    <div className="flex flex-wrap items-center justify-center gap-4">
+                        <button
+                            onClick={onOpenPricing}
+                            className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
+                        >
+                            Pricing
+                        </button>
+                        <button
+                            onClick={onOpenCompare}
+                            className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
+                        >
+                            Compare
+                        </button>
+                        <RouteLink href="/privacy" onNavigate={onOpenPrivacy}>Privacy</RouteLink>
+                        <RouteLink href="/terms" onNavigate={onOpenTerms}>Terms</RouteLink>
+                        <a
+                            href="https://ko-fi.com/sukarth"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 text-gray-500 hover:text-gray-900 text-sm transition-colors"
+                        >
+                            <Heart className="w-3.5 h-3.5" />
+                            Support
+                        </a>
                         <a
                             href="https://github.com/sukarth/IB-EconGraph-AI"
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="flex items-center gap-2 text-gray-400 hover:text-gray-900 text-sm transition-colors"
+                            className="flex items-center gap-2 text-gray-500 hover:text-gray-900 text-sm transition-colors"
                         >
                             <Github className="w-4 h-4" />
                             GitHub
                         </a>
                         <span className="text-gray-200">|</span>
-                        <span className="text-sm text-gray-400">MIT License</span>
+                        <span className="text-sm text-gray-500">AGPL-3.0</span>
                     </div>
                 </div>
             </footer>

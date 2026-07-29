@@ -1,32 +1,23 @@
 import { DiagramData } from '../types';
+import { obfuscateKey, deobfuscateKey } from './keyObfuscation';
+import { OPENROUTER_SYSTEM_INSTRUCTION, buildHistoryContext } from './diagramPrompt';
 
 const STORAGE_KEY = 'econgraph_openrouter_api_key';
 const MODEL_STORAGE_KEY = 'econgraph_openrouter_selected_model';
-
-const OBFUSCATION_PREFIX = 'egk_';
-
-function obfuscate(key: string): string {
-    return OBFUSCATION_PREFIX + btoa(key);
-}
-
-function deobfuscate(stored: string): string {
-    if (!stored.startsWith(OBFUSCATION_PREFIX)) return stored;
-    return atob(stored.slice(OBFUSCATION_PREFIX.length));
-}
 
 export function saveOpenRouterApiKey(key: string): void {
     if (!key.trim()) {
         localStorage.removeItem(STORAGE_KEY);
         return;
     }
-    localStorage.setItem(STORAGE_KEY, obfuscate(key.trim()));
+    localStorage.setItem(STORAGE_KEY, obfuscateKey(key.trim()));
 }
 
 export function getOpenRouterApiKey(): string {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return '';
     try {
-        return deobfuscate(stored);
+        return deobfuscateKey(stored);
     } catch {
         return '';
     }
@@ -262,34 +253,8 @@ export async function generateDiagramDataOpenRouter(prompt: string, history: str
         throw new Error('No OpenRouter model selected. Please choose a model in Settings before using OpenRouter.');
     }
 
-    const historyContext = history.length > 0
-        ? `Previous context:\n${history.join('\n')}\n\nCurrent Request:`
-        : 'Request:';
-
-    const systemInstruction = `
-You are an expert Economics Professor and SVG Graph Generator.
-Your goal is to generate precise coordinate data for economic diagrams based on user prompts.
-
-Rules for generation:
-1. Coordinate System: Use a logical scale (e.g., 0-10 or 0-100). Keep it consistent.
-2. Accuracy: Calculate intersection points mathematically. If Supply is P = 10 + Q and Demand is P = 100 - Q, Equilibrium is Q=45, P=55.
-3. Shared Coordinates (CRITICAL):
-   - If an equilibrium point E is at (50, 50), ensuring the Supply Curve, Demand Curve, and any Shaded Regions ALL use the exact coordinate (50, 50).
-   - Do not approximate. If a shaded region (e.g., Consumer Surplus) is bounded by the Price axis, Demand curve, and Equilibrium price, the vertices must strictly match the curve points.
-4. Shading:
-   - Provide a closed polygon for shaded areas.
-5. Labels:
-   - Use LaTeX-style formatting for subscripts and superscripts.
-   - Example: "P_1", "Q^*", "Q_{tax}", "D_{private}".
-6. Context:
-   - If the user asks for "Monopoly", ensure MR is below D.
-   - If the user asks for "Tax", shift the appropriate curve.
-
-Output requirements (STRICT):
-- Output ONLY a JSON object (no prose).
-- Do NOT wrap in markdown.
-- The JSON must match the DiagramData shape used by this app: { title, summary, xAxis, yAxis, curves, annotatedPoints, shadedRegions }.
-`;
+    const historyContext = buildHistoryContext(history);
+    const systemInstruction = OPENROUTER_SYSTEM_INSTRUCTION;
 
     const baseBody: any = {
         model,
