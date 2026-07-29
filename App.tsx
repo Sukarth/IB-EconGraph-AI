@@ -196,6 +196,11 @@ export default function App() {
   // The handover is decided (so `pendingGuestAdoption` is already false) but the
   // copy is still running. See the auto-open effect.
   const [adoptingGuestWork, setAdoptingGuestWork] = useState(false);
+  // Identifies the guest handover currently in flight, so a copy that finishes
+  // after an account switch can tell it is no longer the current one. A ref
+  // rather than state because the scope-load effect has to invalidate it
+  // synchronously, before it publishes the incoming account's data.
+  const adoptionRef = useRef<symbol | null>(null);
 
   const applyRemote = useCallback((remoteGraphs: Graph[], remoteProjects: Project[], forUserId: string) => {
     // A sync that lands after the account changed is carrying the previous
@@ -307,6 +312,12 @@ export default function App() {
   // accounts swaps which namespace is live, and never deletes the other one.
   useEffect(() => {
     if (storeScope === null || storeScope === loadedScope) return;
+    // A different namespace is taking over, so any guest handover still in
+    // flight belongs to the one we are leaving. Invalidated here rather than by
+    // comparing scopes when it resolves: this line runs synchronously, before
+    // the await below reads anything, so there is no window in which the new
+    // account's data is already live but the handover still looks current.
+    adoptionRef.current = null;
     let cancelled = false;
     void (async () => {
       const stored = await readScope(storeScope);
@@ -396,6 +407,15 @@ export default function App() {
     // an empty library, creates a blank diagram and syncs it up, and the adopted
     // graphs then replace it locally while the stray row stays in the cloud.
     setAdoptingGuestWork(true);
+    // Deliberately NOT an effect-scoped `cancelled` flag. Setting
+    // `pendingGuestAdoption` above re-runs this effect, which would trip such a
+    // flag immediately, and by then adoptScope has already emptied the guest
+    // namespace: dropping the result would leave the diagrams written to disk
+    // but absent from state, and the auto-open effect would overwrite them with
+    // a blank one. Only an account switch is a reason to withhold them, and the
+    // scope-load effect above is what says so.
+    const token = Symbol('guest-adoption');
+    adoptionRef.current = token;
     const adoptingInto = storeScope;
     void (async () => {
       try {
@@ -404,15 +424,10 @@ export default function App() {
         // namespace. Leave this account empty rather than showing diagrams that
         // were not actually saved to it.
         if (!adopted) return;
-        // Deliberately NOT an effect-scoped `cancelled` flag. Setting
-        // `pendingGuestAdoption` above re-runs this effect, which would trip
-        // such a flag immediately, and by then adoptScope has already emptied
-        // the guest namespace: dropping the result would leave the diagrams
-        // written to disk but absent from state, and the auto-open below would
-        // overwrite them with a blank one. The only reason to withhold them is
-        // that a different account is live now, and they are safe on disk in
-        // `adoptingInto` for when it comes back.
-        if (loadedScopeRef.current !== adoptingInto) return;
+        // A different account took over while this was copying. The diagrams
+        // are on disk in `adoptingInto` and will be there when it comes back;
+        // publishing them now would file them under whoever is signed in.
+        if (adoptionRef.current !== token) return;
         setGraphs(adopted.graphs);
         setProjects(adopted.projects);
       } finally {
