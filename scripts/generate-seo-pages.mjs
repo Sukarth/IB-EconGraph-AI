@@ -15,6 +15,13 @@
 // reaches dist/404.html and returns a real 404 status. A catch-all would answer
 // every mistyped URL with 200 and the app, which tells crawlers that infinitely
 // many junk URLs are real pages.
+//
+// The /s/:slug rewrite constrains the slug to the same shape parsePath accepts
+// in App.tsx, so the edge and the client agree on which URLs are share routes.
+// Anything else under /s/ is a 404 rather than a silent fall back to the
+// landing page. It deliberately mirrors parsePath rather than the narrower
+// 24-hex format shares are actually minted in: were the two to disagree, the
+// edge would reject links the app can still open.
 
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';

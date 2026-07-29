@@ -12,6 +12,6 @@
     { "source": "/home", "destination": "/" },
     { "source": "/editor", "destination": "/" },
     { "source": "/settings", "destination": "/" },
-    { "source": "/s/:slug", "destination": "/" }
+    { "source": "/s/:slug([A-Za-z0-9_-]{6,64})", "destination": "/" }
   ]
 }
