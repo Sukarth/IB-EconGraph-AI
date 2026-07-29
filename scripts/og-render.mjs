@@ -15,8 +15,8 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdirSync, writeFileSync, rmSync, existsSync, statSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { mkdirSync, writeFileSync, rmSync, existsSync, statSync, accessSync, constants } from 'node:fs';
+import { join, dirname, extname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
@@ -36,8 +36,30 @@ const CHROME_CANDIDATES = [
     '/usr/bin/chromium',
 ];
 
+/**
+ * Runnable enough to be worth trying, checked without running it.
+ *
+ * Not a `--version` probe: on Windows that prints no version and instead hands
+ * the arguments to the already-running browser, which opens a tab. Checking the
+ * file is the most that can be done here without side effects.
+ */
+function isRunnable(path) {
+    if (!existsSync(path) || !statSync(path).isFile()) return false;
+    // The executable bit only means something on unix. Windows does not set it,
+    // and X_OK there degrades to a read check that any readable file passes, so
+    // go by extension instead: it is the nearest thing Windows has to "this can
+    // be run", and it is what rejects a path like package.json.
+    if (process.platform === 'win32') return extname(path).toLowerCase() === '.exe';
+    try {
+        accessSync(path, constants.X_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 function findChrome() {
-    const found = CHROME_CANDIDATES.find((p) => p && existsSync(p));
+    const found = CHROME_CANDIDATES.find((p) => p && isRunnable(p));
     if (!found) {
         console.error(
             'og-render: could not find Chrome. Set CHROME_PATH, or render the cards by hand ' +
@@ -48,7 +70,27 @@ function findChrome() {
     return found;
 }
 
-const chrome = process.env.CHROME_PATH ?? findChrome();
+/**
+ * An unset CHROME_PATH means "go and look". A wrong one is a mistake worth
+ * reporting straight away: left to the render loop it surfaces as sixteen
+ * identical ENOENT failures that name the cards rather than the cause.
+ */
+function resolveChrome() {
+    const override = process.env.CHROME_PATH;
+    if (!override) return findChrome();
+    if (!isRunnable(override)) {
+        const why = !existsSync(override)
+            ? 'does not exist'
+            : statSync(override).isDirectory()
+              ? 'is a directory'
+              : 'is not an executable file';
+        console.error(`og-render: CHROME_PATH is set to "${override}", which ${why}.`);
+        process.exit(1);
+    }
+    return override;
+}
+
+const chrome = resolveChrome();
 
 // Chrome refuses to share a profile with a running instance, and this must not
 // disturb the user's own browser, so give it a scratch profile of its own.

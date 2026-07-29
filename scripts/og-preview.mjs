@@ -28,7 +28,6 @@ const cards = OG_CARDS.map(
 const html = `<!doctype html>
 <meta charset="utf-8">
 <title>OG card previews (${OG_CARDS.length})</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
 <style>
   body{margin:0;padding:32px;background:#0f172a;color:#e2e8f0;
        font-family:Inter,'Segoe UI',system-ui,sans-serif}
