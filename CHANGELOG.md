@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-07-29
+
+Both of the faults below affected the deployed site only. Nothing was wrong
+locally, which is how 1.1.0 shipped with them: neither the dev server nor
+`npm run build` exercises the code path involved.
+
+### Fixed
+
+- **Every page except the homepage returned 404.** Two independent faults. The
+  deployment's build command was overridden outside version control, so the
+  diagram pages, route shells and `sitemap.xml` were never generated; and the
+  SPA fallback rewrote to `/index.html`, which cannot work alongside clean URLs.
+  Between them they took out `/pricing`, `/compare`, `/privacy`, `/terms`,
+  `/settings`, `/editor`, `/diagrams/*`, `/sitemap.xml` and every share link
+- **The API functions could not start.** Relative imports in `api/` were missing
+  the file extension Node's ESM loader requires, so hosted AI generation,
+  checkout, the billing portal, usage reporting, account deletion and the Polar
+  webhook all failed to load when invoked
+- Share links with a malformed slug now return a real 404 instead of quietly
+  rendering the landing page
+- Moving around the app can no longer produce a URL that works until you reload
+
+### Added
+
+- A 404 page, served with a genuine 404 status rather than answering with the
+  app and a 200, which would tell crawlers that every mistyped URL is a page
+- A Diagrams link in the landing page navigation and footer. The prerendered
+  diagram pages were reachable only from search results before
+- A build-time route guard, so a route the deployment cannot serve fails the
+  build instead of 404ing only in production
+
 ## [1.1.0] - 2026-07-27
 
 ### Added
@@ -90,5 +121,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Box select and eraser tools
 - Pan and zoom controls
 
+[1.1.1]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.0.0
