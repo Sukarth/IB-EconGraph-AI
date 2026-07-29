@@ -28,6 +28,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_PAGES, SITE_URL } from './seo-content.mjs';
 import { CLIENT_ROUTES, SHARE_PATH } from '../routes.mjs';
+import { esc, svgLabel, renderDiagramSvg } from './diagram-svg.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = join(__dirname, '..', 'dist');
@@ -50,99 +51,6 @@ const ARROW = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" strok
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-const esc = (s) =>
-    String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/** Render label text with _x subscripts / ^x superscripts as SVG tspans. */
-function svgLabel(text) {
-    let out = '';
-    let i = 0;
-    // After a sub/superscript, the baseline reset is carried onto the next
-    // plain-text run (dy on real characters) rather than an empty whitespace
-    // tspan, which would render a stray space inside the label.
-    let pendingReset = null;
-    while (i < text.length) {
-        const ch = text[i];
-        if ((ch === '_' || ch === '^') && i + 1 < text.length) {
-            let token = text[i + 1];
-            let consumed = 2;
-            if (text[i + 1] === '{') {
-                const close = text.indexOf('}', i + 2);
-                if (close !== -1) {
-                    token = text.slice(i + 2, close);
-                    consumed = close - i + 1;
-                }
-            }
-            const dy = ch === '_' ? '3' : '-4';
-            out += `<tspan dy="${dy}" font-size="9">${esc(token)}</tspan>`;
-            pendingReset = ch === '_' ? '-3' : '4';
-            i += consumed;
-        } else {
-            // Gather the whole plain-text run and emit it once, applying any
-            // pending baseline reset to it. A trailing '_' or '^' has nothing
-            // to mark up and lands here, so always consume the character at i
-            // to guarantee the outer loop makes progress.
-            let j = i + 1;
-            while (j < text.length && text[j] !== '_' && text[j] !== '^') j += 1;
-            const run = text.slice(i, j);
-            out += pendingReset !== null
-                ? `<tspan dy="${pendingReset}">${esc(run)}</tspan>`
-                : esc(run);
-            pendingReset = null;
-            i = j;
-            continue;
-        }
-    }
-    return out;
-}
-
-/** Render the declarative diagram spec into an inline SVG. */
-function renderDiagramSvg(page) {
-    const { diagram, axes } = page;
-    if (!diagram) return '';
-    const W = 520, H = 360, PAD = 52;
-    const sx = (x) => PAD + (x / 100) * (W - PAD - 24);
-    const sy = (y) => H - PAD - (y / 100) * (H - PAD - 28);
-
-    let body = '';
-
-    for (const line of diagram.lines ?? []) {
-        const [x1, y1, x2, y2, color, label, dashed] = line;
-        body += `<line x1="${sx(x1)}" y1="${sy(y1)}" x2="${sx(x2)}" y2="${sy(y2)}" stroke="${color}" stroke-width="2.5" stroke-linecap="round"${dashed ? ' stroke-dasharray="6,5"' : ''}/>`;
-        if (label) {
-            body += `<text x="${sx(x2) + 6}" y="${sy(y2) + 4}" fill="${color}" font-size="13" font-weight="700">${svgLabel(label)}</text>`;
-        }
-    }
-
-    for (const curve of diagram.curves ?? []) {
-        const [x1, y1, cx, cy, x2, y2, color, label] = curve;
-        body += `<path d="M ${sx(x1)} ${sy(y1)} Q ${sx(cx)} ${sy(cy)} ${sx(x2)} ${sy(y2)}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round"/>`;
-        if (label) {
-            body += `<text x="${sx(x2) + 6}" y="${sy(y2) + 4}" fill="${color}" font-size="13" font-weight="700">${svgLabel(label)}</text>`;
-        }
-    }
-
-    for (const point of diagram.points ?? []) {
-        const [x, y, label] = point;
-        body += `<line x1="${sx(x)}" y1="${sy(y)}" x2="${sx(x)}" y2="${sy(0)}" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4,4"/>`;
-        body += `<line x1="${sx(0)}" y1="${sy(y)}" x2="${sx(x)}" y2="${sy(y)}" stroke="#9ca3af" stroke-width="1" stroke-dasharray="4,4"/>`;
-        body += `<circle cx="${sx(x)}" cy="${sy(y)}" r="5" fill="#111827" stroke="#fff" stroke-width="2"/>`;
-        body += `<text x="${sx(x) + 8}" y="${sy(y) - 8}" fill="#111827" font-size="12.5" font-weight="700">${svgLabel(label)}</text>`;
-    }
-
-    return `
-<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(page.keyword)} illustration" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <marker id="ah" markerWidth="6" markerHeight="7" refX="2.5" refY="3" orient="auto"><polygon points="0 0, 6 3, 0 6" fill="#374151"/></marker>
-  </defs>
-  <rect width="${W}" height="${H}" fill="#ffffff" rx="12"/>
-  <line x1="${sx(0)}" y1="${sy(0)}" x2="${W - 12}" y2="${sy(0)}" stroke="#374151" stroke-width="2" marker-end="url(#ah)"/>
-  <line x1="${sx(0)}" y1="${sy(0)}" x2="${sx(0)}" y2="14" stroke="#374151" stroke-width="2" marker-end="url(#ah)"/>
-  <text x="${W - 16}" y="${sy(0) + 26}" fill="#374151" font-size="12.5" font-weight="600" text-anchor="end">${esc(axes[0])}</text>
-  <text x="${sx(0) + 10}" y="22" fill="#374151" font-size="12.5" font-weight="600">${esc(axes[1])}</text>
-  ${body}
-</svg>`;
-}
 
 const CSS = `
 :root{color-scheme:light}
@@ -513,66 +421,50 @@ ${urls
  * the price axis and no quantity is ever traded.
  */
 function render404Page() {
+    // Deliberately sparse. Everything the earlier version spelled out in
+    // annotations is already said by the shape: one vertical line, one normal
+    // one, meeting on the price axis.
     const figure = `
-<svg viewBox="0 0 420 300" role="img" aria-label="Supply and demand diagram in which supply is a vertical line at a quantity of zero, so no quantity is ever traded.">
+<svg viewBox="0 0 400 250" role="img" aria-label="Supply and demand diagram in which supply is a vertical line at a quantity of zero, so no quantity is ever traded.">
   <defs>
     <marker id="ah" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
       <path d="M0 0 L10 5 L0 10 z" fill="#94a3b8"/>
     </marker>
   </defs>
-  <line x1="60" y1="250" x2="390" y2="250" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
-  <line x1="60" y1="250" x2="60" y2="30" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
-  <text x="384" y="272" font-size="12" fill="#6b7280" text-anchor="end">Quantity of this page</text>
-  <text x="52" y="34" font-size="12" fill="#6b7280" text-anchor="end">Price</text>
+  <line x1="62" y1="205" x2="372" y2="205" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+  <line x1="62" y1="205" x2="62" y2="28" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#ah)"/>
+  <text x="366" y="227" font-size="12" fill="#6b7280" text-anchor="end">Quantity of this page</text>
+  <text x="54" y="32" font-size="12" fill="#6b7280" text-anchor="end">Price</text>
 
   <!-- Supply: perfectly inelastic at Q = 0. There is exactly one of this page,
-       and we do not have it. -->
-  <line x1="60" y1="40" x2="60" y2="250" stroke="#22c55e" stroke-width="6" stroke-linecap="round"/>
-  <text x="74" y="52" font-size="13" font-weight="700" fill="#16a34a">S</text>
-  <text x="74" y="68" font-size="11" fill="#6b7280">supply of this page</text>
+       and we do not have it. Nudged a hair off the axis so both lines read. -->
+  <line x1="63.5" y1="42" x2="63.5" y2="205" stroke="#22c55e" stroke-width="6" stroke-linecap="round"/>
+  <text x="78" y="54" font-size="13" font-weight="700" fill="#16a34a">S</text>
 
-  <!-- Demand: entirely normal. You wanted it. Kept shallow and starting well
-       below the supply label so the annotations below sit clear of it. -->
-  <line x1="60" y1="120" x2="350" y2="245" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
-  <text x="240" y="192" font-size="11" fill="#6b7280">your demand for it</text>
-  <text x="332" y="222" font-size="13" font-weight="700" fill="#2563eb">D</text>
+  <!-- Demand: entirely normal. You wanted it. -->
+  <line x1="62" y1="96" x2="320" y2="200" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
+  <text x="328" y="196" font-size="13" font-weight="700" fill="#2563eb">D</text>
 
-  <circle cx="60" cy="120" r="5.5" fill="#111827"/>
-  <text x="86" y="102" font-size="13" font-weight="700" fill="#111827">404</text>
-  <text x="86" y="118" font-size="11" fill="#6b7280">equilibrium at Q = 0</text>
+  <circle cx="62" cy="96" r="5.5" fill="#111827"/>
+  <text x="78" y="92" font-size="13" font-weight="700" fill="#111827">404</text>
 </svg>`;
 
     const bodyHtml = `
 <main class="wrap">
   <h1 style="margin-top:48px">This page has no supply</h1>
   <p class="lede">
-    Demand looks healthy. Unfortunately the quantity supplied is zero, so the
-    market clears at nothing at all. In less economic terms: that URL does not
-    exist here.
+    Demand looks healthy. Quantity supplied is zero, so the market clears at
+    nothing at all. Less economically: that URL is not here. Either the address
+    has a typo, or it was a share link that has since been revoked.
   </p>
 
-  <div class="figure">${figure}</div>
-
-  <p>It was probably one of these:</p>
-  <ul class="what">
-    <li>A <b>typo in the address</b>, which is the cheapest thing to rule out.</li>
-    <li>A <b>share link that was revoked</b>. Share links can be turned off by whoever created them, and once revoked the diagram is private again.</li>
-    <li>An <b>old link</b> to a page that has since moved.</li>
-  </ul>
+  <!-- Narrower than the text column: at full width the diagram dominates the
+       page and its labels scale up with it. -->
+  <div class="figure" style="max-width:480px;margin-inline:auto">${figure}</div>
 
   <div class="cta-row">
-    <a class="btn primary" href="/editor">Open the editor${ARROW}</a>
-    <a class="btn ghost" href="/diagrams">Browse diagram guides</a>
-  </div>
-  <p class="free-note">Free, unlimited and watermark-free. No account needed to draw.</p>
-
-  <h2>Popular diagram guides</h2>
-  <div class="cards">
-    ${DIAGRAM_PAGES.slice(0, 6)
-        .map(
-            (p) => `<a href="/diagrams/${p.slug}"><div class="k">${esc(p.navTitle)}</div><div class="d">${esc(p.h1)}</div></a>`,
-        )
-        .join('\n    ')}
+    <a class="btn primary" href="/">Take me back to the supply${ARROW}</a>
+    <a class="btn ghost" href="/editor">Open the editor</a>
   </div>
 </main>`;
 
