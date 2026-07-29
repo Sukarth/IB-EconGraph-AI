@@ -520,17 +520,18 @@ function render404Page() {
   <!-- Supply: perfectly inelastic at Q = 0. There is exactly one of this page,
        and we do not have it. -->
   <line x1="60" y1="40" x2="60" y2="250" stroke="#22c55e" stroke-width="6" stroke-linecap="round"/>
-  <text x="74" y="56" font-size="13" font-weight="700" fill="#16a34a">S</text>
-  <text x="74" y="72" font-size="11" fill="#6b7280">supply of this page</text>
+  <text x="74" y="52" font-size="13" font-weight="700" fill="#16a34a">S</text>
+  <text x="74" y="68" font-size="11" fill="#6b7280">supply of this page</text>
 
-  <!-- Demand: entirely normal. You wanted it. -->
-  <line x1="60" y1="70" x2="360" y2="240" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
-  <text x="336" y="228" font-size="13" font-weight="700" fill="#2563eb">D</text>
-  <text x="278" y="212" font-size="11" fill="#6b7280">your demand for it</text>
+  <!-- Demand: entirely normal. You wanted it. Kept shallow and starting well
+       below the supply label so the annotations below sit clear of it. -->
+  <line x1="60" y1="120" x2="350" y2="245" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
+  <text x="240" y="192" font-size="11" fill="#6b7280">your demand for it</text>
+  <text x="332" y="222" font-size="13" font-weight="700" fill="#2563eb">D</text>
 
-  <circle cx="60" cy="70" r="5.5" fill="#111827"/>
-  <text x="78" y="100" font-size="13" font-weight="700" fill="#111827">404</text>
-  <text x="78" y="116" font-size="11" fill="#6b7280">equilibrium at Q = 0</text>
+  <circle cx="60" cy="120" r="5.5" fill="#111827"/>
+  <text x="86" y="102" font-size="13" font-weight="700" fill="#111827">404</text>
+  <text x="86" y="118" font-size="11" fill="#6b7280">equilibrium at Q = 0</text>
 </svg>`;
 
     const bodyHtml = `
