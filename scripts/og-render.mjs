@@ -48,7 +48,22 @@ function findChrome() {
     return found;
 }
 
-const chrome = process.env.CHROME_PATH ?? findChrome();
+/**
+ * An unset CHROME_PATH means "go and look". A wrong one is a mistake worth
+ * reporting straight away: left to the render loop it surfaces as sixteen
+ * identical ENOENT failures that name the cards rather than the cause.
+ */
+function resolveChrome() {
+    const override = process.env.CHROME_PATH;
+    if (!override) return findChrome();
+    if (!existsSync(override)) {
+        console.error(`og-render: CHROME_PATH is set to "${override}", which does not exist.`);
+        process.exit(1);
+    }
+    return override;
+}
+
+const chrome = resolveChrome();
 
 // Chrome refuses to share a profile with a running instance, and this must not
 // disturb the user's own browser, so give it a scratch profile of its own.
