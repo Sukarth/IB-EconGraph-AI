@@ -5,6 +5,7 @@ import { getAIProvider } from './services/aiProvider';
 import { useAuth } from './services/auth';
 import { useCloudSync } from './services/useCloudSync';
 import { recordTombstones, clearTombstones, fetchCloudIds } from './services/sync';
+import { CLIENT_ROUTES, SHARE_PATH } from './routes.mjs';
 import {
   GUEST_SCOPE,
   initLocalStore,
@@ -80,15 +81,14 @@ const PROJECT_COLORS = [
 
 type ViewType = 'landing' | 'home' | 'editor' | 'settings' | 'pricing' | 'compare' | 'shared' | 'privacy' | 'terms';
 
+// The route table lives in routes.mjs so the build can read it too, and refuse
+// to ship a route the deployment has nothing to serve it with.
+const ROUTE_VIEWS = CLIENT_ROUTES as Record<string, ViewType | undefined>;
+
 function parsePath(pathname: string): { view: ViewType; sharedSlug: string | null } {
-  if (pathname === '/home') return { view: 'home', sharedSlug: null };
-  if (pathname === '/editor') return { view: 'editor', sharedSlug: null };
-  if (pathname === '/settings') return { view: 'settings', sharedSlug: null };
-  if (pathname === '/pricing') return { view: 'pricing', sharedSlug: null };
-  if (pathname === '/compare') return { view: 'compare', sharedSlug: null };
-  if (pathname === '/privacy') return { view: 'privacy', sharedSlug: null };
-  if (pathname === '/terms') return { view: 'terms', sharedSlug: null };
-  const shareMatch = pathname.match(/^\/s\/([A-Za-z0-9_-]{6,64})\/?$/);
+  const view = ROUTE_VIEWS[pathname];
+  if (view) return { view, sharedSlug: null };
+  const shareMatch = pathname.match(SHARE_PATH);
   if (shareMatch) return { view: 'shared', sharedSlug: shareMatch[1] };
   return { view: 'landing', sharedSlug: null }; // default for '/' and unknown paths
 }

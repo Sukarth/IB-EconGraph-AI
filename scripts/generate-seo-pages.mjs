@@ -27,6 +27,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DIAGRAM_PAGES, SITE_URL } from './seo-content.mjs';
+import { CLIENT_ROUTES, SHARE_PATH } from '../routes.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = join(__dirname, '..', 'dist');
@@ -598,22 +599,11 @@ function render404Page() {
  * fault as the build command override: invisible locally, total in production.
  *
  * Coverage comes from either side: a prerendered shell (SPA_ROUTES) or a
- * rewrite in vercel.json.
+ * rewrite in vercel.json. The route table is imported, not scraped out of
+ * App.tsx, so a route spelled differently cannot slip past unnoticed.
  */
 function assertEveryClientRouteIsServed() {
-    const appSource = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8');
-    const routes = [...appSource.matchAll(/pathname === '(\/[^']*)'/g)].map((m) => m[1]);
-
-    // If parsePath is ever rewritten in a way this regex cannot read, the check
-    // would quietly pass on an empty list. Refuse to be vacuously satisfied.
-    if (routes.length < 5) {
-        console.error(
-            `Route guard: found only ${routes.length} literal routes in App.tsx parsePath. ` +
-            'The check can no longer read it, so it cannot vouch for anything. Update the guard.',
-        );
-        process.exit(1);
-    }
-
+    const routes = Object.keys(CLIENT_ROUTES);
     const vercelConfig = JSON.parse(readFileSync(join(__dirname, '..', 'vercel.json'), 'utf8'));
     const rewrites = (vercelConfig.rewrites ?? []).map((r) => r.source);
     const shells = new Set(SPA_ROUTES.map((r) => r.path));
@@ -621,17 +611,30 @@ function assertEveryClientRouteIsServed() {
     const unserved = routes.filter((p) => !shells.has(p) && !rewrites.includes(p));
     if (unserved.length > 0) {
         console.error(
-            `Route guard: ${unserved.join(', ')} reachable in App.tsx parsePath but ` +
-            'given neither a prerendered shell nor a vercel.json rewrite. ' +
-            'Each would 404 in production. Add a SPA_ROUTES entry or a rewrite.',
+            `Route guard: ${unserved.join(', ')} routable in routes.mjs but given neither a ` +
+            'prerendered shell nor a vercel.json rewrite. Each would 404 in production. ' +
+            'Add a SPA_ROUTES entry or a rewrite.',
         );
         process.exit(1);
     }
 
-    // Share links are matched by regex rather than a literal, so they are
-    // checked by prefix.
-    if (!rewrites.some((s) => s.startsWith('/s/'))) {
+    // Share links are matched by pattern rather than by name, so the edge and
+    // the client have to agree on the pattern. A stricter rewrite would reject
+    // links the client can open; a looser one hands the app URLs it will not
+    // route, which then render as the landing page instead of a 404.
+    const shareRewrite = rewrites.find((s) => s.startsWith('/s/'));
+    if (!shareRewrite) {
         console.error('Route guard: no /s/ rewrite in vercel.json, so every share link would 404.');
+        process.exit(1);
+    }
+    const classOf = (s) => (s.match(/\(([^)]*)\)/) ?? [])[1];
+    const clientClass = classOf(SHARE_PATH.source);
+    const edgeClass = classOf(shareRewrite);
+    if (!clientClass || !edgeClass || clientClass !== edgeClass) {
+        console.error(
+            `Route guard: the share slug pattern differs between routes.mjs (${clientClass ?? 'unreadable'}) ` +
+            `and the vercel.json rewrite (${edgeClass ?? 'unreadable'}).`,
+        );
         process.exit(1);
     }
 
