@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { DIAGRAM_PAGES, SITE_URL } from './seo-content.mjs';
 import { CLIENT_ROUTES, SHARE_PATH } from '../routes.mjs';
 import { esc, svgLabel, renderDiagramSvg } from './diagram-svg.mjs';
+import { OG_CARDS } from './og-pages.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DIST = join(__dirname, '..', 'dist');
@@ -114,6 +115,18 @@ footer.site a{color:#6b7280}
 
 const LOGO_SVG = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`;
 
+// Which social card each route points at. Built from the same list the cards
+// are generated from, so a page cannot reference one that was never designed.
+const OG_IMAGE_FOR_PATH = new Map(
+    OG_CARDS.flatMap((card) => card.paths.map((p) => [p, `/og/${card.name}.png`])),
+);
+const OG_IMAGE_DEFAULT = '/og/og-default.png';
+
+/** The card for a route, falling back to the generic one. */
+function ogImagePath(canonicalPath) {
+    return OG_IMAGE_FOR_PATH.get(canonicalPath) ?? OG_IMAGE_DEFAULT;
+}
+
 function pageShell({ title, description, canonicalPath, jsonLd, bodyHtml, robots = 'index, follow' }) {
     return `<!DOCTYPE html>
 <html lang="en">
@@ -131,9 +144,14 @@ function pageShell({ title, description, canonicalPath, jsonLd, bodyHtml, robots
 <meta property="og:description" content="${esc(description)}"/>
 <meta property="og:url" content="${SITE_URL}${canonicalPath}"/>
 <meta property="og:site_name" content="IB EconGraph AI"/>
-<meta name="twitter:card" content="summary"/>
+<meta property="og:image" content="${SITE_URL}${ogImagePath(canonicalPath)}"/>
+<meta property="og:image:width" content="1200"/>
+<meta property="og:image:height" content="630"/>
+<meta property="og:image:alt" content="${esc(title)}"/>
+<meta name="twitter:card" content="summary_large_image"/>
 <meta name="twitter:title" content="${esc(title)}"/>
 <meta name="twitter:description" content="${esc(description)}"/>
+<meta name="twitter:image" content="${SITE_URL}${ogImagePath(canonicalPath)}"/>
 ${jsonLd.map((obj) => `<script type="application/ld+json">${JSON.stringify(obj)}</script>`).join('\n')}
 ${GOATCOUNTER}
 <style>${CSS}</style>
@@ -366,6 +384,10 @@ function renderSpaRouteShell(indexHtml, route) {
         [/<meta property="og:url"[\s\S]*?\/>/, `<meta property="og:url" content="${url}" />`],
         [/<meta name="twitter:title"[\s\S]*?\/>/, `<meta name="twitter:title" content="${esc(route.title)}" />`],
         [/<meta name="twitter:description"[\s\S]*?\/>/, `<meta name="twitter:description" content="${esc(route.description)}" />`],
+        // index.html carries the generic card; each shell swaps in its own.
+        [/<meta property="og:image" content="[^"]*"\s*\/>/, `<meta property="og:image" content="${SITE_URL}${ogImagePath(route.path)}" />`],
+        [/<meta property="og:image:alt"[\s\S]*?\/>/, `<meta property="og:image:alt" content="${esc(route.title)}" />`],
+        [/<meta name="twitter:image"[\s\S]*?\/>/, `<meta name="twitter:image" content="${SITE_URL}${ogImagePath(route.path)}" />`],
     ];
     let html = indexHtml;
     for (const [pattern, replacement] of substitutions) {
@@ -588,6 +610,43 @@ function assertEveryClientRouteIsServed() {
     return routes.length;
 }
 
+/**
+ * Fail the build if a page points at a social card that is not there.
+ *
+ * The cards are rasterised by hand (scripts/og-render.mjs) and committed, so
+ * unlike everything else here they can fall out of step with the code that
+ * references them: adding a card to og-pages.mjs without re-rendering leaves
+ * the tag pointing at a 404. A missing preview image is worse than none, since
+ * the platforms cache the failure.
+ */
+function assertEverySocialCardExists() {
+    const publicDir = join(__dirname, '..', 'public', 'og');
+    const distDir = join(__dirname, '..', 'dist', 'og');
+    // Only check dist when a real build produced it; this script also runs on
+    // its own, before vite has copied public/ across.
+    const distBuilt = existsSync(join(__dirname, '..', 'dist', 'index.html')) && existsSync(distDir);
+
+    const missing = [];
+    for (const card of OG_CARDS) {
+        const file = `${card.name}.png`;
+        if (!existsSync(join(publicDir, file))) {
+            missing.push(`public/og/${file}`);
+        } else if (distBuilt && !existsSync(join(distDir, file))) {
+            missing.push(`dist/og/${file} (present in public/, not copied)`);
+        }
+    }
+
+    if (missing.length > 0) {
+        console.error(
+            `Social card guard: ${missing.length} card(s) referenced but missing:\n  ${missing.join('\n  ')}\n` +
+            'Run `node scripts/og-render.mjs` and commit the PNGs.',
+        );
+        process.exit(1);
+    }
+
+    return OG_CARDS.length;
+}
+
 // ── emit ─────────────────────────────────────────────────────────────────────
 
 mkdirSync(join(DIST, 'diagrams'), { recursive: true });
@@ -606,8 +665,10 @@ writeFileSync(join(DIST, '404.html'), render404Page());
 writeFileSync(join(DIST, 'sitemap.xml'), renderSitemap());
 
 const routeCount = assertEveryClientRouteIsServed();
+const cardCount = assertEverySocialCardExists();
 
 console.log(
     `Generated ${DIAGRAM_PAGES.length} diagram pages + hub + ${SPA_ROUTES.length} route shells + 404 + sitemap.xml into dist/\n` +
-    `All ${routeCount} client routes are served by a shell or a rewrite.`,
+    `All ${routeCount} client routes are served by a shell or a rewrite.\n` +
+    `All ${cardCount} social cards are present.`,
 );

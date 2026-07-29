@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-07-29
+
+### Added
+
+- **Social preview images** for every page. The site asked for a large preview
+  card and supplied no image, so a link posted to Discord, WhatsApp, Reddit or
+  Teams rendered as a bare text stub. Each of the 12 diagram pages now has its
+  own card showing that diagram, with separate cards for the homepage, the
+  guides hub, pricing and comparison
+
+### Changed
+
+- **The 404 page is simpler.** The heading names the error, three short lines
+  replace a paragraph followed by a list of reasons and six links, and the
+  main button goes back to the homepage rather than further into the site
+- The build now fails if a page references a social card that is not there, and
+  if a view can be navigated to but has no route (the latter would 404 only
+  after a reload)
+
 ## [1.1.1] - 2026-07-29
 
 Both of the faults below affected the deployed site only. Nothing was wrong
@@ -121,6 +140,7 @@ locally, which is how 1.1.0 shipped with them: neither the dev server nor
 - Box select and eraser tools
 - Pan and zoom controls
 
+[1.1.2]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.2
 [1.1.1]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.0
 [1.0.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.0.0

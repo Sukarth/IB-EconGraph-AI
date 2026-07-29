@@ -130,7 +130,10 @@ export function renderOgSvg({ eyebrow, title, subtitle, badges = [], diagramSvg 
   </g>`
         : '';
 
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+    // font-family on the root, not just on each <text>: the nested diagram sets
+    // none of its own, so on an HTML page it inherits the body font and looks
+    // right, while standalone it would fall back to the default serif.
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${FONT}">
   <defs>
     <linearGradient id="brand" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#2563eb"/><stop offset="1" stop-color="#4f46e5"/>
