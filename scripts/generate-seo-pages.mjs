@@ -587,6 +587,57 @@ function render404Page() {
     });
 }
 
+/**
+ * Fail the build if the app can route to a path that the deployment will not
+ * serve.
+ *
+ * Serving the SPA's routes by name, rather than rewriting everything to it, is
+ * what lets an unknown URL return a real 404. The cost is that a route added to
+ * parsePath and to neither half of this setup gets no shell and no rewrite, and
+ * 404s in production while working perfectly in dev. That is the same shape of
+ * fault as the build command override: invisible locally, total in production.
+ *
+ * Coverage comes from either side: a prerendered shell (SPA_ROUTES) or a
+ * rewrite in vercel.json.
+ */
+function assertEveryClientRouteIsServed() {
+    const appSource = readFileSync(join(__dirname, '..', 'App.tsx'), 'utf8');
+    const routes = [...appSource.matchAll(/pathname === '(\/[^']*)'/g)].map((m) => m[1]);
+
+    // If parsePath is ever rewritten in a way this regex cannot read, the check
+    // would quietly pass on an empty list. Refuse to be vacuously satisfied.
+    if (routes.length < 5) {
+        console.error(
+            `Route guard: found only ${routes.length} literal routes in App.tsx parsePath. ` +
+            'The check can no longer read it, so it cannot vouch for anything. Update the guard.',
+        );
+        process.exit(1);
+    }
+
+    const vercelConfig = JSON.parse(readFileSync(join(__dirname, '..', 'vercel.json'), 'utf8'));
+    const rewrites = (vercelConfig.rewrites ?? []).map((r) => r.source);
+    const shells = new Set(SPA_ROUTES.map((r) => r.path));
+
+    const unserved = routes.filter((p) => !shells.has(p) && !rewrites.includes(p));
+    if (unserved.length > 0) {
+        console.error(
+            `Route guard: ${unserved.join(', ')} reachable in App.tsx parsePath but ` +
+            'given neither a prerendered shell nor a vercel.json rewrite. ' +
+            'Each would 404 in production. Add a SPA_ROUTES entry or a rewrite.',
+        );
+        process.exit(1);
+    }
+
+    // Share links are matched by regex rather than a literal, so they are
+    // checked by prefix.
+    if (!rewrites.some((s) => s.startsWith('/s/'))) {
+        console.error('Route guard: no /s/ rewrite in vercel.json, so every share link would 404.');
+        process.exit(1);
+    }
+
+    return routes.length;
+}
+
 // ── emit ─────────────────────────────────────────────────────────────────────
 
 mkdirSync(join(DIST, 'diagrams'), { recursive: true });
@@ -604,6 +655,9 @@ for (const route of SPA_ROUTES) {
 writeFileSync(join(DIST, '404.html'), render404Page());
 writeFileSync(join(DIST, 'sitemap.xml'), renderSitemap());
 
+const routeCount = assertEveryClientRouteIsServed();
+
 console.log(
-    `Generated ${DIAGRAM_PAGES.length} diagram pages + hub + ${SPA_ROUTES.length} route shells + 404 + sitemap.xml into dist/`,
+    `Generated ${DIAGRAM_PAGES.length} diagram pages + hub + ${SPA_ROUTES.length} route shells + 404 + sitemap.xml into dist/\n` +
+    `All ${routeCount} client routes are served by a shell or a rewrite.`,
 );
