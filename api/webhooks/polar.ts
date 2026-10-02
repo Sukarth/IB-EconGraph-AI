@@ -194,7 +194,20 @@ export function decideEntitlement(
 }
 
 async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
-    const userId = sub.customer?.external_id;
+    // The types are checked at compile time only: 1.x does not validate the
+    // payload at runtime, it just parses it. So if the dashboard endpoint is ever
+    // on a different API version from this code, the payload's real shape can
+    // differ from SubscriptionLike with nothing to say so. A customer object
+    // with no `external_id` key at all is that case, not a checkout made outside
+    // the app (where the key is present and null). Fail loudly, so Polar retries
+    // and the dashboard shows failed deliveries, instead of acking a silent drop.
+    if (!sub.customer || !('external_id' in sub.customer)) {
+        throw new Error(
+            `subscription ${sub.id} payload has no customer.external_id field; ` +
+            'is the Polar webhook endpoint on the same API version as the code (2026-10)?',
+        );
+    }
+    const userId = sub.customer.external_id;
     if (!userId) {
         // Checkout created outside the app (no external customer id) — nothing to map to.
         console.warn(`polar webhook: subscription ${sub.id} has no external customer id, skipping`);
@@ -304,6 +317,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             case 'subscription.uncanceled':
             case 'subscription.revoked':
             case 'subscription.past_due':
+            // The production endpoint subscribes to paused and resumed, and these
+            // used to fall through to "ignore". Resumed matters most: unless an
+            // `updated` happened to accompany it, a user who started paying again
+            // stayed locked out. Applying them is safe because the ordering
+            // check makes a duplicate of the same change a no-op.
+            case 'subscription.paused':
+            case 'subscription.resumed':
+            case 'subscription.cycled':
                 // No cast: the compiler checks the payload against SubscriptionLike.
                 await applySubscriptionState(event.data);
                 break;

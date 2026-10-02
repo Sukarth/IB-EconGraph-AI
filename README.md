@@ -69,7 +69,7 @@ Follow the steps below to run the project locally. Useful for development or tes
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) (v18 or later)
+- [Node.js](https://nodejs.org/) (v22 or later; the Polar and Supabase SDKs both require it)
 - A [Google AI Studio](https://aistudio.google.com/) API key (free)
 
 ### Installation

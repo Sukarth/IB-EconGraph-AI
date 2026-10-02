@@ -2,7 +2,30 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSupabaseAdmin, getUserFromRequest, getProfile } from './_lib/supabaseAdmin.js';
 import type { models } from '@polar-sh/sdk/2026-10';
 import { getPolar } from './_lib/polar.js';
-import { ENTITLED_POLAR_STATUSES } from '../services/entitlement.js';
+
+/**
+ * Every status Polar can report, and whether a subscription in it can still
+ * charge the card. Deletion must cancel all of those, which is a different set
+ * from the ones that grant access: a paused subscription grants nothing, but
+ * resumes and bills on its own at `resumes_at`.
+ *
+ * A Record over the SDK's own union rather than a list, so a status Polar adds
+ * later is a compile error here instead of one that deletion silently skips.
+ * When unsure, true: cancelling something already finished costs nothing,
+ * while missing something live bills a deleted account.
+ */
+const CAN_STILL_CHARGE: Record<models.SubscriptionStatus, boolean> = {
+    active: true,
+    trialing: true,
+    past_due: true,
+    unpaid: true,
+    paused: true,
+    incomplete: true,
+    canceled: false,
+    incomplete_expired: false,
+};
+const CHARGEABLE_STATUSES = (Object.keys(CAN_STILL_CHARGE) as models.SubscriptionStatus[])
+    .filter((s) => CAN_STILL_CHARGE[s]);
 
 /**
  * Permanently deletes the signed-in user's account and all cloud data.
@@ -53,19 +76,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let liveSubscriptionIds: string[];
     try {
         const ids = new Set<string>();
-        // Filter by our own entitled statuses rather than Polar's `active` flag.
-        // That flag is deprecated, and it is not obviously the same set: if it
-        // leaves out past_due, a subscription Polar is still retrying the card
-        // for would be missed here and keep charging a deleted account.
+        // Filter by status explicitly rather than Polar's deprecated `active`
+        // flag, which is not obviously the same set: if it leaves out past_due
+        // or paused, a subscription that will still bill would be missed here
+        // and keep charging a deleted account.
         const subs = getPolar().subscriptions.iterList({
             external_customer_id: user.id,
-            status: [...ENTITLED_POLAR_STATUSES] as models.SubscriptionStatus[],
+            status: CHARGEABLE_STATUSES,
         });
         for await (const sub of subs) {
-            if (ENTITLED_POLAR_STATUSES.has(sub.status)) ids.add(sub.id);
+            if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
         }
         // Belt and braces: cancel anything our own row knows about too, in case
-        // Polar's active filter and our status set ever disagree.
+        // Polar's filter and our status list ever disagree.
         if (profile?.polar_subscription_id) ids.add(profile.polar_subscription_id);
         liveSubscriptionIds = [...ids];
     } catch (err) {
@@ -88,7 +111,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             let stillActive = true;
             try {
                 const sub = await getPolar().subscriptions.get(subId);
-                stillActive = ENTITLED_POLAR_STATUSES.has(sub.status);
+                // `?? true` because a status this code has never heard of must
+                // not count as safely finished.
+                stillActive = CAN_STILL_CHARGE[sub.status] ?? true;
             } catch (lookupErr) {
                 // Only a definite "not found" proves the subscription is gone.
                 // Treating any failure as gone would delete the account during a

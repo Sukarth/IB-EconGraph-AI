@@ -20,6 +20,10 @@ export function getPolar(): Polar {
     cached = createPolar({
         accessToken,
         environment: process.env.POLAR_SERVER === 'sandbox' ? 'sandbox' : 'production',
+        // Seconds. The 1.x default is 5 with no retry, which is tight for
+        // creating a checkout or revoking a subscription. Every call site
+        // already fails safe on a timeout; this just makes it rarer.
+        timeout: 20,
     });
     return cached;
 }

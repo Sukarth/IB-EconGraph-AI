@@ -13,14 +13,18 @@ export function isProUntilActive(proUntil: string | null | undefined): boolean {
 }
 
 /**
- * Polar subscription statuses that count as a live subscription: the user is
- * either paying, in a trial, or behind on payment but not yet cancelled. Used
- * to decide whether to offer a second checkout, whether an account deletion
- * must revoke first, and whether a webhook grants entitlement.
+ * Polar subscription statuses that grant access: the user is either paying, in
+ * a trial, or behind on payment but not yet cancelled. Used to decide whether a
+ * webhook grants entitlement and whether to offer a second checkout.
  *
- * Shared so those three answers cannot drift apart. `past_due` is included on
+ * Shared so those answers cannot drift apart. `past_due` is included on
  * purpose: Polar is still retrying the charge, and dropping access mid-retry
  * would punish a user whose card simply needs updating.
+ *
+ * Not the right question for account deletion, which needs "can this still
+ * charge?" rather than "does this grant access?". A paused subscription grants
+ * nothing but resumes and bills on its own. See CAN_STILL_CHARGE in
+ * api/delete-account.ts.
  */
 export const ENTITLED_POLAR_STATUSES: ReadonlySet<string> = new Set([
     'active',
