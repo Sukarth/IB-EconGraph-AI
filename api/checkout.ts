@@ -72,9 +72,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const appUrl = getAppUrl(req);
         const checkout = await polar.checkouts.create({
             products: [productId],
-            successUrl: `${appUrl}/settings?checkout=success`,
-            externalCustomerId: user.id,
-            customerEmail: user.email ?? undefined,
+            success_url: `${appUrl}/settings?checkout=success`,
+            external_customer_id: user.id,
+            customer_email: user.email ?? undefined,
             metadata: { supabase_user_id: user.id },
         });
         return res.status(200).json({ url: checkout.url });

@@ -1,5 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { validateEvent, WebhookVerificationError } from '@polar-sh/sdk/webhooks';
+// Must agree with the webhook endpoint's api_version in the Polar dashboard,
+// which decides the shape of the payloads Polar sends. See api/_lib/polar.ts.
+import { webhooks, type models } from '@polar-sh/sdk/2026-10';
 import { getSupabaseAdmin } from '../_lib/supabaseAdmin.js';
 import { ENTITLED_POLAR_STATUSES } from '../../services/entitlement.js';
 
@@ -30,21 +32,38 @@ function readRawBody(req: VercelRequest): Promise<Buffer> {
     });
 }
 
-interface SubscriptionLike {
-    id: string;
-    status: string;
-    currentPeriodEnd?: Date | null;
-    recurringInterval?: string | null;
-    customerId?: string;
-    customer?: { id?: string; externalId?: string | null } | null;
-    /** When Polar last changed this subscription. Used to order deliveries. */
-    modifiedAt?: Date | null;
-    createdAt?: Date | null;
-    /** Set when the user has cancelled but keeps access to the end of the paid period. */
-    cancelAtPeriodEnd?: boolean | null;
-    /** The definitive end of access once cancellation is scheduled. */
-    endsAt?: Date | null;
-}
+/**
+ * The fields entitlement depends on, picked from the SDK's own Subscription
+ * type rather than declared here by hand.
+ *
+ * This used to be a hand-written interface, and the payload was cast to it with
+ * `as unknown as`. That cast switched the compiler off for exactly the code that
+ * grants access: when a field is renamed upstream, as every one of these was
+ * between SDK 0.x (camelCase) and 1.x (snake_case), reads of the old names just
+ * become undefined. The user then cannot be identified, the handler acks with
+ * 202, and Polar never retries. Picking from the SDK type turns a rename into a
+ * compile error here instead.
+ *
+ * Narrower than the full type so decideEntitlement can be exercised with only
+ * the fields it reads. `cancel_at_period_end` marks a user who has cancelled but
+ * keeps access until `ends_at`, the definitive end once cancellation is
+ * scheduled. `modified_at` is when Polar last changed the subscription, and is
+ * what orders deliveries.
+ */
+type SubscriptionLike = Pick<
+    models.Subscription,
+    | 'id'
+    | 'status'
+    | 'current_period_end'
+    | 'recurring_interval'
+    | 'customer_id'
+    | 'modified_at'
+    | 'created_at'
+    | 'cancel_at_period_end'
+    | 'ends_at'
+> & {
+    customer?: Pick<models.Subscription['customer'], 'id' | 'external_id'> | null;
+};
 
 function toDate(value: unknown): Date | null {
     if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
@@ -63,22 +82,16 @@ function millis(value: unknown): number | null {
 /**
  * Ordering key for an event. Webhook deliveries are not ordered and are
  * retried, so "the event that arrived last" is not "the event that happened
- * last". Polar stamps every subscription change with `modifiedAt`; a freshly
- * created subscription has none yet, so `createdAt` stands in.
+ * last". Polar stamps every subscription change with `modified_at`; a freshly
+ * created subscription has none yet, so `created_at` stands in.
  *
  * Returns null when neither is usable, in which case the caller falls back to
  * applying the event unordered (better than dropping billing state entirely).
  */
 function eventTimestamp(sub: SubscriptionLike): Date | null {
-    for (const candidate of [sub.modifiedAt, sub.createdAt]) {
-        if (candidate instanceof Date && !Number.isNaN(candidate.getTime())) return candidate;
-        // The SDK parses these into Dates, but a hand-built payload may carry strings.
-        if (typeof candidate === 'string') {
-            const parsed = new Date(candidate);
-            if (!Number.isNaN(parsed.getTime())) return parsed;
-        }
-    }
-    return null;
+    // SDK 1.x hands these over as the ISO strings Polar sent; 0.x parsed them
+    // into Dates. toDate takes either, and rejects anything unparseable.
+    return toDate(sub.modified_at) ?? toDate(sub.created_at);
 }
 
 /** What the profile row currently says about this user's billing. */
@@ -134,14 +147,14 @@ export function decideEntitlement(
     if (entitled) {
         // Polar keeps a subscription `active` after the user schedules a
         // cancellation; it just stops renewing. Access through the period they
-        // already paid for is correct and deliberate, but `endsAt` is then the
+        // already paid for is correct and deliberate, but `ends_at` is then the
         // authoritative end date, and the renewal margin must not apply: that
         // margin exists to cover the gap before a *renewal* webhook lands, and
         // a subscription that will not renew has no such gap. Adding it would
         // hand out a day of access nobody paid for.
-        const endsAt = toDate(sub.endsAt);
-        const scheduledToEnd = sub.cancelAtPeriodEnd === true || !!endsAt;
-        const periodEnd = endsAt ?? toDate(sub.currentPeriodEnd);
+        const endsAt = toDate(sub.ends_at);
+        const scheduledToEnd = sub.cancel_at_period_end === true || !!endsAt;
+        const periodEnd = endsAt ?? toDate(sub.current_period_end);
 
         // A malformed event with no usable period end must not lock out an
         // entitled user: fall back to a short provisional window (a later,
@@ -161,7 +174,7 @@ export function decideEntitlement(
         }
         // Normally never move a still-entitled user's access backward. A
         // scheduled cancellation is the exception: it legitimately shortens
-        // access (dropping the margin, or moving to an earlier endsAt), and the
+        // access (dropping the margin, or moving to an earlier ends_at), and the
         // event-ordering check above already rejects genuinely stale deliveries,
         // which is what this guard used to be protecting against.
         proUntil = new Date(scheduledToEnd ? candidate : Math.max(candidate, currentEnd)).toISOString();
@@ -181,7 +194,7 @@ export function decideEntitlement(
 }
 
 async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
-    const userId = sub.customer?.externalId;
+    const userId = sub.customer?.external_id;
     if (!userId) {
         // Checkout created outside the app (no external customer id) — nothing to map to.
         console.warn(`polar webhook: subscription ${sub.id} has no external customer id, skipping`);
@@ -222,8 +235,8 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
         .update({
             pro_status: sub.status,
             pro_until: proUntil,
-            plan_interval: sub.recurringInterval ?? null,
-            polar_customer_id: sub.customer?.id ?? sub.customerId ?? null,
+            plan_interval: sub.recurring_interval ?? null,
+            polar_customer_id: sub.customer?.id ?? sub.customer_id ?? null,
             polar_subscription_id: sub.id,
             polar_event_at: eventAtIso,
             updated_at: new Date().toISOString(),
@@ -260,13 +273,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(503).json({ error: 'Webhook not configured' });
     }
 
-    let event;
+    let event: webhooks.WebhookPayload;
     try {
         const raw = await readRawBody(req);
-        event = validateEvent(raw, req.headers as Record<string, string>, secret);
+        // Awaited: in SDK 1.x this is async. Without the await, `event` is a
+        // Promise, `event.type` matches no case below, and every delivery is
+        // acked as an event we ignore, so no subscriber is ever granted access.
+        event = await webhooks.validateEvent(raw, req.headers as Record<string, string>, secret);
     } catch (err) {
-        if (err instanceof WebhookVerificationError) {
+        if (err instanceof webhooks.PolarWebhookVerificationError) {
             return res.status(403).json({ error: 'Invalid signature' });
+        }
+        if (err instanceof webhooks.PolarWebhookUnknownTypeError) {
+            // The signature was checked before the type, so this is genuinely
+            // from Polar: an event type newer than this SDK. Nothing here would
+            // handle it, so acknowledge rather than have Polar retry it forever.
+            console.warn(`polar webhook: acking unknown event type ${err.eventType}`);
+            return res.status(202).json({ received: true });
         }
         console.error('polar webhook: failed to parse event', err);
         return res.status(400).json({ error: 'Invalid payload' });
@@ -281,7 +304,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             case 'subscription.uncanceled':
             case 'subscription.revoked':
             case 'subscription.past_due':
-                await applySubscriptionState(event.data as unknown as SubscriptionLike);
+                // No cast: the compiler checks the payload against SubscriptionLike.
+                await applySubscriptionState(event.data);
                 break;
             default:
                 // Ack everything else (order.*, checkout.*, customer.*) — subscription

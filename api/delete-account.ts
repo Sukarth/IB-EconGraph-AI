@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSupabaseAdmin, getUserFromRequest, getProfile } from './_lib/supabaseAdmin.js';
+import type { models } from '@polar-sh/sdk/2026-10';
 import { getPolar } from './_lib/polar.js';
 import { ENTITLED_POLAR_STATUSES } from '../services/entitlement.js';
 
@@ -51,12 +52,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // account. Polar is the authority, so query it by external customer id.
     let liveSubscriptionIds: string[];
     try {
-        const page = await getPolar().subscriptions.list({ externalCustomerId: user.id, active: true });
         const ids = new Set<string>();
-        for await (const chunk of page) {
-            for (const sub of chunk.result.items) {
-                if (ENTITLED_POLAR_STATUSES.has(sub.status ?? '')) ids.add(sub.id);
-            }
+        // Filter by our own entitled statuses rather than Polar's `active` flag.
+        // That flag is deprecated, and it is not obviously the same set: if it
+        // leaves out past_due, a subscription Polar is still retrying the card
+        // for would be missed here and keep charging a deleted account.
+        const subs = getPolar().subscriptions.iterList({
+            external_customer_id: user.id,
+            status: [...ENTITLED_POLAR_STATUSES] as models.SubscriptionStatus[],
+        });
+        for await (const sub of subs) {
+            if (ENTITLED_POLAR_STATUSES.has(sub.status)) ids.add(sub.id);
         }
         // Belt and braces: cancel anything our own row knows about too, in case
         // Polar's active filter and our status set ever disagree.
@@ -73,7 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     for (const subId of liveSubscriptionIds) {
         try {
-            await getPolar().subscriptions.revoke({ id: subId });
+            await getPolar().subscriptions.revoke(subId);
         } catch (err) {
             // The revoke can fail simply because the subscription is already
             // inactive on Polar (our pro_status was stale) — in that case there's
@@ -81,8 +87,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // it's genuinely still active.
             let stillActive = true;
             try {
-                const sub = await getPolar().subscriptions.get({ id: subId });
-                stillActive = ENTITLED_POLAR_STATUSES.has(sub.status ?? '');
+                const sub = await getPolar().subscriptions.get(subId);
+                stillActive = ENTITLED_POLAR_STATUSES.has(sub.status);
             } catch (lookupErr) {
                 // Only a definite "not found" proves the subscription is gone.
                 // Treating any failure as gone would delete the account during a

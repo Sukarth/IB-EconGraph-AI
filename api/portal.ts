@@ -36,9 +36,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
         const session = await polar.customerSessions.create({
-            externalCustomerId: user.id,
+            external_customer_id: user.id,
         });
-        return res.status(200).json({ url: session.customerPortalUrl });
+        return res.status(200).json({ url: session.customer_portal_url });
     } catch (err) {
         console.error('portal: failed to create customer session', err);
         return res.status(404).json({

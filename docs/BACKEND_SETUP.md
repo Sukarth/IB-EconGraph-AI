@@ -158,6 +158,11 @@ through Google Cloud; AI Studio (C) has a free tier.
 4. Add a **webhook** (Settings → Webhooks):
    - URL: `https://<your-domain>/api/webhooks/polar`
    - Format: RAW
+   - API version: **2026-10**. This must match the version the code is pinned
+     to (the `@polar-sh/sdk/2026-10` imports in `api/`), because it decides the
+     shape of the payloads Polar sends. Polar retires each version about nine
+     months after release, so when moving the code to a newer one, change the
+     webhook's version at the same time.
    - Events: all `subscription.*` events (created, active, updated, canceled,
      uncanceled, revoked, past_due)
    - Copy the signing secret → `POLAR_WEBHOOK_SECRET`
