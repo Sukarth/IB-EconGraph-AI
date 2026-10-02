@@ -24,8 +24,6 @@ const CAN_STILL_CHARGE: Record<models.SubscriptionStatus, boolean> = {
     canceled: false,
     incomplete_expired: false,
 };
-const CHARGEABLE_STATUSES = (Object.keys(CAN_STILL_CHARGE) as models.SubscriptionStatus[])
-    .filter((s) => CAN_STILL_CHARGE[s]);
 
 /**
  * Permanently deletes the signed-in user's account and all cloud data.
@@ -76,14 +74,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let liveSubscriptionIds: string[];
     try {
         const ids = new Set<string>();
-        // Filter by status explicitly rather than Polar's deprecated `active`
-        // flag, which is not obviously the same set: if it leaves out past_due
-        // or paused, a subscription that will still bill would be missed here
-        // and keep charging a deleted account.
-        const subs = getPolar().subscriptions.iterList({
-            external_customer_id: user.id,
-            status: CHARGEABLE_STATUSES,
-        });
+        // Every subscription this customer has, deliberately unfiltered. Polar's
+        // deprecated `active` flag might leave out past_due or paused, and even a
+        // status filter built from our own table would drop a status Polar adds
+        // later before the `?? true` below could treat it as chargeable. A
+        // customer has a handful of subscriptions at most, so filtering here
+        // costs nothing.
+        const subs = getPolar().subscriptions.iterList({ external_customer_id: user.id });
         for await (const sub of subs) {
             if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
         }

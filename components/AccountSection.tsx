@@ -122,6 +122,12 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
         return () => window.clearTimeout(t);
     }, [checkoutSuccess]);
 
+    // A paused subscription grants no access, so isPro is false, but the user
+    // still has one to manage: checkout refuses to start a second while it
+    // exists and sends them to the billing portal to resume. Without this, the
+    // only button offered is "Become a Supporter", which checkout then refuses.
+    const isPaused = !isPro && profile?.pro_status === 'paused';
+
     const handlePortal = useCallback(async () => {
         setPortalLoading(true);
         setPortalError(null);
@@ -270,12 +276,14 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                                         Supporter{profile?.plan_interval === 'year' ? ' (yearly)' : profile?.plan_interval === 'month' ? ' (monthly)' : ''}
                                         {profile?.pro_until && <span className="text-gray-400 font-normal">· renews/expires {formatDate(profile.pro_until)}</span>}
                                     </div>
+                                ) : isPaused ? (
+                                    <div className="text-xs text-gray-500 mt-0.5">Supporter plan paused. Resume it from Manage billing.</div>
                                 ) : (
                                     <div className="text-xs text-gray-400 mt-0.5">Free plan, unlimited local diagrams, BYOK AI, full exports</div>
                                 )}
                             </div>
                             <div className="flex items-center gap-2">
-                                {isPro ? (
+                                {isPro || isPaused ? (
                                     <button
                                         onClick={handlePortal}
                                         disabled={portalLoading}
