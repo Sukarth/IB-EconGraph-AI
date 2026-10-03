@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Download, Crop as CropIcon, Eye, Move, RotateCcw, Check, Palette } from 'lucide-react';
 import { EditorSettings } from '../types';
@@ -22,6 +22,40 @@ export const Modal: React.FC<ModalProps> = ({
     showCloseButton = true,
 }) => {
     const overlayRef = useRef<HTMLDivElement>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const titleId = useId();
+
+    // Whatever had focus before the dialog opened, so closing can hand it back.
+    // Captured during the render that opens the dialog, because by the time any
+    // effect runs, a child's autoFocus has already moved focus inside: an effect
+    // would record the dialog's own input, and restoring focus to that detached
+    // element on close drops it on <body>. Reading here is idempotent, so a
+    // second StrictMode render records the same element.
+    const restoreFocusRef = useRef<HTMLElement | null>(null);
+    const wasOpenRef = useRef(false);
+    if (isOpen && !wasOpenRef.current && typeof document !== 'undefined') {
+        restoreFocusRef.current = document.activeElement as HTMLElement | null;
+    }
+
+    // Focus in on open, back out on close. Keyed on isOpen alone, deliberately
+    // separate from the effect below, which re-runs whenever a caller passes a
+    // fresh onClose (most pass an inline arrow, so every render): restoring
+    // focus there would yank it out of the dialog on every keystroke.
+    useEffect(() => {
+        wasOpenRef.current = isOpen;
+        if (!isOpen) return;
+        // After commit, so a child's autoFocus gets first claim; otherwise start
+        // keyboard users inside the dialog rather than on the page behind it.
+        const frame = requestAnimationFrame(() => {
+            const dialog = dialogRef.current;
+            if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+        });
+        return () => {
+            cancelAnimationFrame(frame);
+            restoreFocusRef.current?.focus?.();
+            restoreFocusRef.current = null;
+        };
+    }, [isOpen]);
 
     useEffect(() => {
         const handleEscape = (e: KeyboardEvent) => {
@@ -61,13 +95,21 @@ export const Modal: React.FC<ModalProps> = ({
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn"
             onClick={(e) => e.target === overlayRef.current && onClose()}
         >
-            <div className={`bg-white rounded-xl shadow-2xl w-full ${sizeClasses[size]} animate-scaleIn`}>
+            <div
+                ref={dialogRef}
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby={title ? titleId : undefined}
+                tabIndex={-1}
+                className={`bg-white rounded-xl shadow-2xl w-full ${sizeClasses[size]} animate-scaleIn outline-none`}
+            >
                 {(title || showCloseButton) && (
                     <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-                        {title && <h3 className="text-lg font-semibold text-gray-900">{title}</h3>}
+                        {title && <h3 id={titleId} className="text-lg font-semibold text-gray-900">{title}</h3>}
                         {showCloseButton && (
                             <button
                                 onClick={onClose}
+                                aria-label="Close"
                                 className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors text-gray-500 hover:text-gray-700"
                             >
                                 <X className="w-5 h-5" />

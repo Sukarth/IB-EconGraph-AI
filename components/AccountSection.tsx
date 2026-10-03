@@ -141,6 +141,12 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
     // exists and sends them to the billing portal to resume. Without this, the
     // only button offered is "Become a Supporter", which checkout then refuses.
     const isPaused = !isPro && profile?.pro_status === 'paused';
+    // Whether deleting the account would end a subscription, which is not the same
+    // as having access: unpaid, incomplete or lapsed past_due subscriptions grant
+    // nothing but are still cancelled, and still the user's business to know about.
+    // Inverted on purpose so a status this code has never seen still warns.
+    const hasLiveSubscription =
+        isPro || !['none', 'canceled', 'incomplete_expired'].includes(profile?.pro_status ?? 'none');
 
     const handlePortal = useCallback(async () => {
         setPortalLoading(true);
@@ -515,7 +521,7 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                                     This permanently deletes your account and everything synced to the cloud:
                                     diagrams, projects, version history, templates and share links. Diagrams saved
                                     on this device are kept.
-                                    {(isPro || isPaused) && (
+                                    {hasLiveSubscription && (
                                         <>
                                             {' '}Your Supporter plan also ends now, and paid time left isn't refunded
                                             automatically, except where the law requires it.
@@ -525,7 +531,7 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                                 </p>
                                 {/* Asked here, before the point of no return, because once the account is
                                     gone a supporter has nothing left to sign in with. */}
-                                {(isPro || isPaused) && (
+                                {hasLiveSubscription && (
                                     <p className="text-xs text-gray-500">
                                         Questions about billing or a refund? Email{' '}
                                         <a href={`mailto:${CONTACT_EMAIL}`} className="text-blue-600 hover:text-blue-700">
