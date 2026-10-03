@@ -163,8 +163,13 @@ through Google Cloud; AI Studio (C) has a free tier.
      shape of the payloads Polar sends. Polar retires each version about nine
      months after release, so when moving the code to a newer one, change the
      webhook's version at the same time.
-   - Events: all `subscription.*` events (created, active, updated, canceled,
-     uncanceled, revoked, past_due)
+   - Events: tick each of these individually (Polar has no wildcard):
+     `subscription.created`, `subscription.active`, `subscription.updated`,
+     `subscription.canceled`, `subscription.uncanceled`, `subscription.revoked`,
+     `subscription.past_due`, `subscription.paused`, `subscription.resumed`,
+     `subscription.cycled`. Paused and resumed matter most: without them, a
+     pause or resume reaches the app only if Polar happens to send an
+     `updated` alongside it, so a resumed subscriber could stay locked out.
    - Copy the signing secret → `POLAR_WEBHOOK_SECRET`
 5. Polar acts as **merchant of record**, so EU VAT is handled for you.
 
