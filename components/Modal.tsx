@@ -4,6 +4,13 @@ import { X, Download, Crop as CropIcon, Eye, Move, RotateCcw, Check, Palette } f
 import { EditorSettings } from '../types';
 import { usePortalTooltip } from './usePortalTooltip';
 
+// Open modals, innermost last. Only the top one answers Escape and Tab, so a
+// confirmation opened from inside another modal (ColorPicker's reset confirm)
+// closes and traps on its own instead of its parent closing with it.
+const openModalStack: object[] = [];
+
+const FOCUSABLE = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 interface ModalProps {
     isOpen: boolean;
     onClose: () => void;
@@ -37,39 +44,89 @@ export const Modal: React.FC<ModalProps> = ({
         restoreFocusRef.current = document.activeElement as HTMLElement | null;
     }
 
-    // Focus in on open, back out on close. Keyed on isOpen alone, deliberately
-    // separate from the effect below, which re-runs whenever a caller passes a
-    // fresh onClose (most pass an inline arrow, so every render): restoring
-    // focus there would yank it out of the dialog on every keystroke.
+    // Callers mostly pass an inline arrow, a new function every render. Reading
+    // it through a ref keeps the effect below keyed on isOpen alone, so it does
+    // not tear down and re-run (and re-steal focus) on every keystroke.
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
+    const stackToken = useRef<object>({}).current;
+    const pendingRestoreRef = useRef<{ cancelled: boolean } | null>(null);
+
     useEffect(() => {
         wasOpenRef.current = isOpen;
         if (!isOpen) return;
-        // After commit, so a child's autoFocus gets first claim; otherwise start
-        // keyboard users inside the dialog rather than on the page behind it.
-        const frame = requestAnimationFrame(() => {
-            const dialog = dialogRef.current;
-            if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
-        });
-        return () => {
-            cancelAnimationFrame(frame);
-            restoreFocusRef.current?.focus?.();
-            restoreFocusRef.current = null;
-        };
-    }, [isOpen]);
 
-    useEffect(() => {
-        const handleEscape = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') onClose();
-        };
-        if (isOpen) {
-            document.addEventListener('keydown', handleEscape);
-            document.body.style.overflow = 'hidden';
+        // React StrictMode replays effects in development: cleanup, then this
+        // setup again synchronously, with the dialog still open. The cleanup
+        // defers its focus restore to a microtask precisely so this can cancel
+        // it; otherwise the replay would hand focus back to the trigger and
+        // forget it, and the real close would have nothing to restore.
+        // (Not requestAnimationFrame: it does not run at all in a hidden tab.)
+        if (pendingRestoreRef.current) {
+            pendingRestoreRef.current.cancelled = true;
+            pendingRestoreRef.current = null;
         }
-        return () => {
-            document.removeEventListener('keydown', handleEscape);
-            document.body.style.overflow = 'auto';
+
+        openModalStack.push(stackToken);
+        document.body.style.overflow = 'hidden';
+        const isTop = () => openModalStack[openModalStack.length - 1] === stackToken;
+
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (!isTop()) return;
+            if (e.key === 'Escape') {
+                onCloseRef.current();
+                return;
+            }
+            if (e.key !== 'Tab') return;
+            // Keep Tab and Shift+Tab inside the dialog: aria-modal promises the
+            // page behind is out of reach, so keyboard focus must not get there.
+            const dialog = dialogRef.current;
+            if (!dialog) return;
+            const focusables = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)]
+                .filter((el) => !el.hasAttribute('disabled') && el.offsetParent !== null);
+            if (focusables.length === 0) {
+                e.preventDefault();
+                dialog.focus();
+                return;
+            }
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const active = document.activeElement;
+            const outside = !dialog.contains(active);
+            if (e.shiftKey && (active === first || active === dialog || outside)) {
+                e.preventDefault();
+                last.focus();
+            } else if (!e.shiftKey && (active === last || outside)) {
+                e.preventDefault();
+                first.focus();
+            }
         };
-    }, [isOpen, onClose]);
+        document.addEventListener('keydown', onKeyDown);
+
+        // Start keyboard users inside the dialog rather than on the page behind
+        // it. Passive effects run after commit, so a child's autoFocus has
+        // already had first claim and is left alone.
+        const dialog = dialogRef.current;
+        if (dialog && !dialog.contains(document.activeElement)) dialog.focus();
+
+        return () => {
+            document.removeEventListener('keydown', onKeyDown);
+            const at = openModalStack.lastIndexOf(stackToken);
+            if (at !== -1) openModalStack.splice(at, 1);
+            // Only the last modal to close gives the page its scroll back; an
+            // inner confirm closing must not unlock the page under its parent.
+            if (openModalStack.length === 0) document.body.style.overflow = '';
+            const pending = { cancelled: false };
+            pendingRestoreRef.current = pending;
+            queueMicrotask(() => {
+                if (pending.cancelled) return;
+                pendingRestoreRef.current = null;
+                const el = restoreFocusRef.current;
+                restoreFocusRef.current = null;
+                el?.focus?.();
+            });
+        };
+    }, [isOpen, stackToken]);
 
     if (!isOpen) return null;
 
