@@ -199,7 +199,8 @@ export const TermsPage: React.FC = () => (
                 <LI>You can cancel any time via <strong>Manage billing</strong> in Settings. Access continues
                     until the end of the period you've already paid for, after which it ends.</LI>
                 <LI>Except where required by law (for example EU/UK withdrawal rights, handled through Polar),
-                    payments are non-refundable. Deleting your account cancels the subscription.</LI>
+                    payments are non-refundable. Deleting your account ends the subscription immediately,
+                    and any time already paid for is not refunded.</LI>
             </ul>
         </section>
 

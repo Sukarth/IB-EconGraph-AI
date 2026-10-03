@@ -476,8 +476,9 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                             </div>
                             <p className="text-xs text-gray-400">
                                 Permanently deletes your account and all cloud-synced data (projects, graphs,
-                                version history, templates, share links) and cancels any active subscription.
-                                This can't be undone. Diagrams stored locally on this device are not affected.
+                                version history, templates, share links) and ends any active subscription
+                                immediately. Time you've already paid for is not refunded. This can't be undone.
+                                Diagrams stored locally on this device are not affected.
                             </p>
                             {!deleteConfirm ? (
                                 <button
@@ -488,7 +489,11 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                                 </button>
                             ) : (
                                 <div className="space-y-2">
-                                    <p className="text-sm font-medium text-red-700">Are you sure? This is permanent.</p>
+                                    <p className="text-sm font-medium text-red-700">
+                                        {isPro || isPaused
+                                            ? 'Are you sure? This is permanent, and your Supporter plan ends now with no refund for the time left.'
+                                            : 'Are you sure? This is permanent.'}
+                                    </p>
                                     <div className="flex items-center gap-2">
                                         <button
                                             onClick={handleDeleteAccount}
