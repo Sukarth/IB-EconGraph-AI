@@ -7,6 +7,11 @@ import { useAuth } from '../services/auth';
 import { openBillingPortal, deleteAccount } from '../services/billing';
 import { fetchHostedUsage, HostedUsage } from '../services/hostedAi';
 import { SyncState } from '../services/useCloudSync';
+import { CONTACT_EMAIL } from '../services/contact';
+import { Modal } from './Modal';
+
+/** What a user types to confirm account deletion. */
+const DELETE_PHRASE = 'delete my account';
 import AuthModal from './AuthModal';
 
 interface AccountSectionProps {
@@ -41,9 +46,18 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
     const [pwBusy, setPwBusy] = useState(false);
     const [pwError, setPwError] = useState<string | null>(null);
     const [pwSaved, setPwSaved] = useState(false);
-    const [deleteConfirm, setDeleteConfirm] = useState(false);
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [deleteText, setDeleteText] = useState('');
     const [deleteBusy, setDeleteBusy] = useState(false);
     const [deleteError, setDeleteError] = useState<string | null>(null);
+    // Forgiving about case and stray spaces: the point is a deliberate act, not
+    // a spelling test.
+    const deleteTyped = deleteText.trim().toLowerCase() === DELETE_PHRASE;
+    const openDeleteModal = useCallback(() => {
+        setDeleteText('');
+        setDeleteError(null);
+        setDeleteOpen(true);
+    }, []);
     const [usage, setUsage] = useState<HostedUsage | null>(null);
     const [portalLoading, setPortalLoading] = useState(false);
     const [portalError, setPortalError] = useState<string | null>(null);
@@ -121,6 +135,18 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
         const t = window.setTimeout(() => setCheckoutSuccess(false), 8000);
         return () => window.clearTimeout(t);
     }, [checkoutSuccess]);
+
+    // A paused subscription grants no access, so isPro is false, but the user
+    // still has one to manage: checkout refuses to start a second while it
+    // exists and sends them to the billing portal to resume. Without this, the
+    // only button offered is "Become a Supporter", which checkout then refuses.
+    const isPaused = !isPro && profile?.pro_status === 'paused';
+    // Whether deleting the account would end a subscription, which is not the same
+    // as having access: unpaid, incomplete or lapsed past_due subscriptions grant
+    // nothing but are still cancelled, and still the user's business to know about.
+    // Inverted on purpose so a status this code has never seen still warns.
+    const hasLiveSubscription =
+        isPro || !['none', 'canceled', 'incomplete_expired'].includes(profile?.pro_status ?? 'none');
 
     const handlePortal = useCallback(async () => {
         setPortalLoading(true);
@@ -270,12 +296,14 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                                         Supporter{profile?.plan_interval === 'year' ? ' (yearly)' : profile?.plan_interval === 'month' ? ' (monthly)' : ''}
                                         {profile?.pro_until && <span className="text-gray-400 font-normal">· renews/expires {formatDate(profile.pro_until)}</span>}
                                     </div>
+                                ) : isPaused ? (
+                                    <div className="text-xs text-gray-500 mt-0.5">Supporter plan paused. Resume it from Manage billing.</div>
                                 ) : (
                                     <div className="text-xs text-gray-400 mt-0.5">Free plan, unlimited local diagrams, BYOK AI, full exports</div>
                                 )}
                             </div>
                             <div className="flex items-center gap-2">
-                                {isPro ? (
+                                {isPro || isPaused ? (
                                     <button
                                         onClick={handlePortal}
                                         disabled={portalLoading}
@@ -460,48 +488,96 @@ const AccountSection: React.FC<AccountSectionProps> = ({ syncState, onSyncNow, o
                             </div>
                         )}
 
-                        {/* Danger zone, delete account + all cloud data */}
-                        <div className="pt-4 border-t border-gray-100 space-y-2">
-                            <div className="flex items-center gap-2 text-sm font-medium text-red-600">
-                                <Trash2 className="w-4 h-4" />
-                                Delete account
-                            </div>
-                            <p className="text-xs text-gray-400">
-                                Permanently deletes your account and all cloud-synced data (projects, graphs,
-                                version history, templates, share links) and cancels any active subscription.
-                                This can't be undone. Diagrams stored locally on this device are not affected.
-                            </p>
-                            {!deleteConfirm ? (
-                                <button
-                                    onClick={() => { setDeleteConfirm(true); setDeleteError(null); }}
-                                    className="px-3 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
-                                >
-                                    Delete my account
-                                </button>
-                            ) : (
-                                <div className="space-y-2">
-                                    <p className="text-sm font-medium text-red-700">Are you sure? This is permanent.</p>
-                                    <div className="flex items-center gap-2">
-                                        <button
-                                            onClick={handleDeleteAccount}
-                                            disabled={deleteBusy}
-                                            className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 transition-colors"
-                                        >
-                                            {deleteBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                                            Yes, delete everything
-                                        </button>
-                                        <button
-                                            onClick={() => setDeleteConfirm(false)}
-                                            disabled={deleteBusy}
-                                            className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700"
-                                        >
-                                            Cancel
-                                        </button>
-                                    </div>
+                        {/* Danger zone. The details and the confirmation live in the modal, so
+                            the settings page stays short and nobody deletes on a single click. */}
+                        <div className="pt-4 border-t border-gray-100 flex flex-wrap items-center justify-between gap-3">
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-2 text-sm font-medium text-red-600">
+                                    <Trash2 className="w-4 h-4" />
+                                    Delete account
                                 </div>
-                            )}
-                            {deleteError && <p className="text-xs text-red-600">{deleteError}</p>}
+                                <p className="text-xs text-gray-400 mt-0.5">Permanently delete your account and cloud data.</p>
+                            </div>
+                            <button
+                                onClick={openDeleteModal}
+                                className="px-3 py-2 text-sm font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                            >
+                                Delete my account
+                            </button>
                         </div>
+
+                        <Modal
+                            isOpen={deleteOpen}
+                            // Not dismissable mid-delete: closing would hide the outcome.
+                            onClose={() => { if (!deleteBusy) setDeleteOpen(false); }}
+                            title="Delete your account?"
+                            size="md"
+                        >
+                            <form
+                                onSubmit={(e) => { e.preventDefault(); if (deleteTyped && !deleteBusy) handleDeleteAccount(); }}
+                                className="space-y-4"
+                            >
+                                <p className="text-sm text-gray-600 leading-relaxed">
+                                    This permanently deletes your account and everything synced to the cloud:
+                                    diagrams, projects, version history, templates and share links. Diagrams saved
+                                    on this device are kept.
+                                    {hasLiveSubscription && (
+                                        <>
+                                            {' '}Your Supporter plan also ends now, and paid time left isn't refunded
+                                            automatically, except where the law requires it.
+                                        </>
+                                    )}
+                                    {' '}This can't be undone.
+                                </p>
+                                {/* Asked here, before the point of no return, because once the account is
+                                    gone a supporter has nothing left to sign in with. */}
+                                {hasLiveSubscription && (
+                                    <p className="text-xs text-gray-500">
+                                        Questions about billing or a refund? Email{' '}
+                                        <a href={`mailto:${CONTACT_EMAIL}`} className="text-blue-600 hover:text-blue-700">
+                                            {CONTACT_EMAIL}
+                                        </a>{' '}
+                                        first.
+                                    </p>
+                                )}
+                                <div className="space-y-1.5">
+                                    <label htmlFor="delete-confirm" className="block text-sm text-gray-700">
+                                        Type <span className="font-semibold text-gray-900">{DELETE_PHRASE}</span> to confirm
+                                    </label>
+                                    <input
+                                        id="delete-confirm"
+                                        type="text"
+                                        value={deleteText}
+                                        onChange={(e) => setDeleteText(e.target.value)}
+                                        placeholder={DELETE_PHRASE}
+                                        autoComplete="off"
+                                        spellCheck={false}
+                                        autoFocus
+                                        disabled={deleteBusy}
+                                        className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg outline-none focus:border-red-400 focus:ring-2 focus:ring-red-100 disabled:bg-gray-50"
+                                    />
+                                </div>
+                                {deleteError && <p className="text-sm text-red-600">{deleteError}</p>}
+                                <div className="flex justify-end gap-2 pt-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setDeleteOpen(false)}
+                                        disabled={deleteBusy}
+                                        className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={!deleteTyped || deleteBusy}
+                                        className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                    >
+                                        {deleteBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                                        Delete account
+                                    </button>
+                                </div>
+                            </form>
+                        </Modal>
                     </>
                 )}
             </div>

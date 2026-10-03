@@ -1,7 +1,29 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { getSupabaseAdmin, getUserFromRequest, getProfile } from './_lib/supabaseAdmin.js';
+import type { models } from '@polar-sh/sdk/2026-10';
 import { getPolar } from './_lib/polar.js';
-import { ENTITLED_POLAR_STATUSES } from '../services/entitlement.js';
+
+/**
+ * Every status Polar can report, and whether a subscription in it can still
+ * charge the card. Deletion must cancel all of those, which is a different set
+ * from the ones that grant access: a paused subscription grants nothing, but
+ * resumes and bills on its own at `resumes_at`.
+ *
+ * A Record over the SDK's own union rather than a list, so a status Polar adds
+ * later is a compile error here instead of one that deletion silently skips.
+ * When unsure, true: cancelling something already finished costs nothing,
+ * while missing something live bills a deleted account.
+ */
+const CAN_STILL_CHARGE: Record<models.SubscriptionStatus, boolean> = {
+    active: true,
+    trialing: true,
+    past_due: true,
+    unpaid: true,
+    paused: true,
+    incomplete: true,
+    canceled: false,
+    incomplete_expired: false,
+};
 
 /**
  * Permanently deletes the signed-in user's account and all cloud data.
@@ -51,15 +73,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // account. Polar is the authority, so query it by external customer id.
     let liveSubscriptionIds: string[];
     try {
-        const page = await getPolar().subscriptions.list({ externalCustomerId: user.id, active: true });
         const ids = new Set<string>();
-        for await (const chunk of page) {
-            for (const sub of chunk.result.items) {
-                if (ENTITLED_POLAR_STATUSES.has(sub.status ?? '')) ids.add(sub.id);
-            }
+        // Every subscription this customer has, deliberately unfiltered. Polar's
+        // deprecated `active` flag might leave out past_due or paused, and even a
+        // status filter built from our own table would drop a status Polar adds
+        // later before the `?? true` below could treat it as chargeable. A
+        // customer has a handful of subscriptions at most, so filtering here
+        // costs nothing.
+        const subs = getPolar().subscriptions.iterList({ external_customer_id: user.id });
+        for await (const sub of subs) {
+            if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
         }
         // Belt and braces: cancel anything our own row knows about too, in case
-        // Polar's active filter and our status set ever disagree.
+        // Polar's filter and our status list ever disagree.
         if (profile?.polar_subscription_id) ids.add(profile.polar_subscription_id);
         liveSubscriptionIds = [...ids];
     } catch (err) {
@@ -73,7 +99,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     for (const subId of liveSubscriptionIds) {
         try {
-            await getPolar().subscriptions.revoke({ id: subId });
+            await getPolar().subscriptions.revoke(subId);
         } catch (err) {
             // The revoke can fail simply because the subscription is already
             // inactive on Polar (our pro_status was stale) — in that case there's
@@ -81,8 +107,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             // it's genuinely still active.
             let stillActive = true;
             try {
-                const sub = await getPolar().subscriptions.get({ id: subId });
-                stillActive = ENTITLED_POLAR_STATUSES.has(sub.status ?? '');
+                const sub = await getPolar().subscriptions.get(subId);
+                // `?? true` because a status this code has never heard of must
+                // not count as safely finished.
+                stillActive = CAN_STILL_CHARGE[sub.status] ?? true;
             } catch (lookupErr) {
                 // Only a definite "not found" proves the subscription is gone.
                 // Treating any failure as gone would delete the account during a

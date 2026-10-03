@@ -49,6 +49,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             code: 'already_subscribed',
         });
     }
+    // A paused subscription grants no access, so the check above lets it
+    // through, but it resumes and bills on its own. A second checkout would
+    // then charge the user twice. Point them at resuming it instead.
+    if (profile?.polar_subscription_id && profile.pro_status === 'paused') {
+        return res.status(409).json({
+            error: 'Your Supporter subscription is paused. Resume it from Settings > Manage billing instead of starting a new one.',
+            code: 'subscription_paused',
+        });
+    }
 
     let polar;
     try {
@@ -72,9 +81,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const appUrl = getAppUrl(req);
         const checkout = await polar.checkouts.create({
             products: [productId],
-            successUrl: `${appUrl}/settings?checkout=success`,
-            externalCustomerId: user.id,
-            customerEmail: user.email ?? undefined,
+            success_url: `${appUrl}/settings?checkout=success`,
+            external_customer_id: user.id,
+            customer_email: user.email ?? undefined,
             metadata: { supabase_user_id: user.id },
         });
         return res.status(200).json({ url: checkout.url });

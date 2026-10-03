@@ -1,4 +1,13 @@
-import { Polar } from '@polar-sh/sdk';
+// Pinned to an API version by import path: the versioned client sends the
+// matching Polar-Version header on every request. An unpinned client follows
+// whatever Polar currently calls "Current", which changes every quarter, so the
+// contract would shift under this code with no deploy and no warning.
+//
+// Moving to a newer version means changing this path (and the one in
+// webhooks/polar.ts, which must agree with the webhook endpoint's own
+// api_version in the Polar dashboard). Polar supports each version for about
+// nine months; 2026-10 is supported until roughly July 2027.
+import { createPolar, type Polar } from '@polar-sh/sdk/2026-10';
 
 let cached: Polar | null = null;
 
@@ -8,9 +17,13 @@ export function getPolar(): Polar {
     if (!accessToken) {
         throw new Error('Polar is not configured (POLAR_ACCESS_TOKEN).');
     }
-    cached = new Polar({
+    cached = createPolar({
         accessToken,
-        server: process.env.POLAR_SERVER === 'sandbox' ? 'sandbox' : 'production',
+        environment: process.env.POLAR_SERVER === 'sandbox' ? 'sandbox' : 'production',
+        // Seconds. The 1.x default is 5 with no retry, which is tight for
+        // creating a checkout or revoking a subscription. Every call site
+        // already fails safe on a timeout; this just makes it rarer.
+        timeout: 20,
     });
     return cached;
 }

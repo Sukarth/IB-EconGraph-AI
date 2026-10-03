@@ -1,8 +1,8 @@
 import React from 'react';
+import { CONTACT_EMAIL } from '../services/contact';
 
 const SITE = 'https://ib-econgraph-ai.vercel.app';
 const REPO = 'https://github.com/sukarth/IB-EconGraph-AI';
-const CONTACT_EMAIL = 'sukarth.dev@gmail.com';
 const LAST_UPDATED = '19 July 2026';
 
 /** Inline chevron used in place of a literal arrow character in nav breadcrumbs. */
@@ -199,7 +199,8 @@ export const TermsPage: React.FC = () => (
                 <LI>You can cancel any time via <strong>Manage billing</strong> in Settings. Access continues
                     until the end of the period you've already paid for, after which it ends.</LI>
                 <LI>Except where required by law (for example EU/UK withdrawal rights, handled through Polar),
-                    payments are non-refundable. Deleting your account cancels the subscription.</LI>
+                    payments are non-refundable. Deleting your account ends the subscription immediately,
+                    and does not by itself refund time already paid for.</LI>
             </ul>
         </section>
 
