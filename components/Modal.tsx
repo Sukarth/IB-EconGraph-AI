@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Download, Crop as CropIcon, Eye, Move, RotateCcw, Check, Palette } from 'lucide-react';
 import { EditorSettings } from '../types';
 import { usePortalTooltip } from './usePortalTooltip';
@@ -50,7 +51,11 @@ export const Modal: React.FC<ModalProps> = ({
         full: 'max-w-[95vw]', // Close to full width
     };
 
-    return (
+    // Portalled to <body> so the overlay is never laid out by whatever it is
+    // declared inside. Rendered in place, a parent's `space-y-*` gave the
+    // fixed overlay a top margin and left a strip of page uncovered, and a
+    // parent with a transform or filter would confine it to that parent.
+    return createPortal(
         <div
             ref={overlayRef}
             className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fadeIn"
@@ -72,7 +77,8 @@ export const Modal: React.FC<ModalProps> = ({
                 )}
                 <div className="p-5">{children}</div>
             </div>
-        </div>
+        </div>,
+        document.body,
     );
 };
 

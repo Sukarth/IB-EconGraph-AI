@@ -1,8 +1,8 @@
 import React from 'react';
+import { CONTACT_EMAIL } from '../services/contact';
 
 const SITE = 'https://ib-econgraph-ai.vercel.app';
 const REPO = 'https://github.com/sukarth/IB-EconGraph-AI';
-const CONTACT_EMAIL = 'sukarth.dev@gmail.com';
 const LAST_UPDATED = '19 July 2026';
 
 /** Inline chevron used in place of a literal arrow character in nav breadcrumbs. */
