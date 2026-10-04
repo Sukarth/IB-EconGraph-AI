@@ -61,6 +61,7 @@ type SubscriptionLike = Pick<
     | 'created_at'
     | 'cancel_at_period_end'
     | 'ends_at'
+    | 'metadata'
 > & {
     customer?: Pick<models.Subscription['customer'], 'id' | 'external_id'> | null;
 };
@@ -193,6 +194,25 @@ export function decideEntitlement(
     return { action: 'apply', proUntil, eventAt: eventAtIso };
 }
 
+/**
+ * The app user a subscription belongs to.
+ *
+ * The checkout's own `supabase_user_id` metadata comes first, and the customer's
+ * external id is only the fallback. Polar matches a checkout to an existing
+ * customer by email, and a customer's external id can never be changed once set.
+ * So someone who deletes their account and signs up again with the same email
+ * pays as the old customer, still carrying the deleted account's id: keyed on
+ * that alone, the payment updated no row and the new account never got access.
+ * The metadata is written server-side by api/checkout.ts for the user who
+ * actually started the checkout. Subscriptions without it (any made before the
+ * metadata existed, or outside the app) fall back to the external id.
+ */
+export function subscriptionOwner(sub: Pick<SubscriptionLike, 'metadata' | 'customer'>): string | null {
+    const fromCheckout = sub.metadata?.supabase_user_id;
+    if (typeof fromCheckout === 'string' && fromCheckout) return fromCheckout;
+    return sub.customer?.external_id ?? null;
+}
+
 async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
     // The types are checked at compile time only: 1.x does not validate the
     // payload at runtime, it just parses it. So if the dashboard endpoint is ever
@@ -207,7 +227,7 @@ async function applySubscriptionState(sub: SubscriptionLike): Promise<void> {
             'is the Polar webhook endpoint on the same API version as the code (2026-10)?',
         );
     }
-    const userId = sub.customer.external_id;
+    const userId = subscriptionOwner(sub);
     if (!userId) {
         // Checkout created outside the app (no external customer id) — nothing to map to.
         console.warn(`polar webhook: subscription ${sub.id} has no external customer id, skipping`);

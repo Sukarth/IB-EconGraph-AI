@@ -70,23 +70,78 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // A profile can be missing entirely, or its subscription id can be stale
     // because a webhook was never delivered; in either case gating on our copy
     // would skip cancellation and leave a live subscription billing a deleted
-    // account. Polar is the authority, so query it by external customer id.
+    // account. Polar is the authority.
+    //
+    // The external customer id alone is not enough to find everything. Polar
+    // matches a checkout to an existing customer by email and never changes a
+    // customer's external id, so someone who deleted an account and signed up
+    // again with the same email pays as the old customer, under the old account's
+    // id. Their subscriptions are found by the checkout's `supabase_user_id`
+    // metadata (set by api/checkout.ts) and by the customer id the webhook stored.
+    const queries: { external_customer_id?: string; customer_id?: string; metadata?: Record<string, string> }[] = [
+        { external_customer_id: user.id },
+        { metadata: { supabase_user_id: user.id } },
+    ];
+    if (profile?.polar_customer_id) queries.push({ customer_id: profile.polar_customer_id });
+
+    // Whether deleting this account should cancel `sub`. A shared Polar customer
+    // can hold another account's subscription too: if account A changes its
+    // email and a new account B signs up with A's old one, B's checkout lands on
+    // A's customer. Never cancel a subscription the checkout says belongs to
+    // someone else. One with no owner recorded (made before the metadata
+    // existed) is still cancelled, because a missed one keeps charging.
+    //
+    // It must also be tied to this user by one of the identities looked up
+    // above, checked here rather than trusted from the list filter. If Polar
+    // ever ignored a filter, the list would be every subscription in the org,
+    // and the no-owner rule would then cancel other people's older ones.
+    const shouldCancel = (
+        sub: Pick<models.Subscription, 'status' | 'metadata' | 'customer_id'> & {
+            customer?: Pick<models.Subscription['customer'], 'external_id'> | null;
+        },
+    ) => {
+        const owner = sub.metadata?.supabase_user_id;
+        if (typeof owner === 'string' && owner && owner !== user.id) return false;
+        const tiedToUser =
+            owner === user.id ||
+            sub.customer?.external_id === user.id ||
+            (!!profile?.polar_customer_id && sub.customer_id === profile.polar_customer_id);
+        if (!tiedToUser) return false;
+        return CAN_STILL_CHARGE[sub.status] ?? true;
+    };
+
     let liveSubscriptionIds: string[];
     try {
         const ids = new Set<string>();
-        // Every subscription this customer has, deliberately unfiltered. Polar's
+        const seen = new Set<string>();
+        // Every subscription found, deliberately unfiltered by status. Polar's
         // deprecated `active` flag might leave out past_due or paused, and even a
         // status filter built from our own table would drop a status Polar adds
-        // later before the `?? true` below could treat it as chargeable. A
+        // later before the `?? true` above could treat it as chargeable. A
         // customer has a handful of subscriptions at most, so filtering here
         // costs nothing.
-        const subs = getPolar().subscriptions.iterList({ external_customer_id: user.id });
-        for await (const sub of subs) {
-            if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
+        for (const query of queries) {
+            for await (const sub of getPolar().subscriptions.iterList(query)) {
+                seen.add(sub.id);
+                if (shouldCancel(sub)) ids.add(sub.id);
+            }
         }
-        // Belt and braces: cancel anything our own row knows about too, in case
-        // Polar's filter and our status list ever disagree.
-        if (profile?.polar_subscription_id) ids.add(profile.polar_subscription_id);
+        // Belt and braces: the subscription our own row knows about, in case the
+        // lookups above somehow missed it. It goes through the same check, not
+        // straight into the cancel list: before the webhook identified users by
+        // checkout metadata, a shared customer could write account B's
+        // subscription onto account A's row.
+        const onFile = profile?.polar_subscription_id;
+        if (onFile && !seen.has(onFile)) {
+            try {
+                if (shouldCancel(await getPolar().subscriptions.get(onFile))) ids.add(onFile);
+            } catch (err) {
+                // Gone is fine; anything else means we can't tell, so abort below.
+                const status = (err as { statusCode?: number; status?: number } | null)?.statusCode
+                    ?? (err as { status?: number } | null)?.status;
+                if (status !== 404) throw err;
+            }
+        }
         liveSubscriptionIds = [...ids];
     } catch (err) {
         // Includes "Polar isn't configured on this deployment", which is a
