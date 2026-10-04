@@ -22,13 +22,13 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Don't leave a contents:write token in .git/config while `npm ci`
           # runs arbitrary dependency install scripts. The push below passes
           # the token explicitly instead.
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # supabase-js needs 22+ for native WebSocket: on 20 createClient throws
           # before it can query. 24 matches Vercel and local.
