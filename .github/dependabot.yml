@@ -1,0 +1,11 @@
+# Keeps the actions in .github/workflows current. The Claude workflows pin
+# actions to commit SHAs, which would otherwise never move.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
