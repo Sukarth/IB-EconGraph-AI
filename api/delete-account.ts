@@ -70,19 +70,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // A profile can be missing entirely, or its subscription id can be stale
     // because a webhook was never delivered; in either case gating on our copy
     // would skip cancellation and leave a live subscription billing a deleted
-    // account. Polar is the authority, so query it by external customer id.
+    // account. Polar is the authority.
+    //
+    // The external customer id alone is not enough to find everything. Polar
+    // matches a checkout to an existing customer by email and never changes a
+    // customer's external id, so someone who deleted an account and signed up
+    // again with the same email pays as the old customer, under the old account's
+    // id. Their subscriptions are found by the checkout's `supabase_user_id`
+    // metadata (set by api/checkout.ts) and by the customer id the webhook stored.
+    const queries: { external_customer_id?: string; customer_id?: string; metadata?: Record<string, string> }[] = [
+        { external_customer_id: user.id },
+        { metadata: { supabase_user_id: user.id } },
+    ];
+    if (profile?.polar_customer_id) queries.push({ customer_id: profile.polar_customer_id });
+
     let liveSubscriptionIds: string[];
     try {
         const ids = new Set<string>();
-        // Every subscription this customer has, deliberately unfiltered. Polar's
+        // Every subscription found, deliberately unfiltered by status. Polar's
         // deprecated `active` flag might leave out past_due or paused, and even a
         // status filter built from our own table would drop a status Polar adds
         // later before the `?? true` below could treat it as chargeable. A
         // customer has a handful of subscriptions at most, so filtering here
         // costs nothing.
-        const subs = getPolar().subscriptions.iterList({ external_customer_id: user.id });
-        for await (const sub of subs) {
-            if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
+        for (const query of queries) {
+            for await (const sub of getPolar().subscriptions.iterList(query)) {
+                if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
+            }
         }
         // Belt and braces: cancel anything our own row knows about too, in case
         // Polar's filter and our status list ever disagree.

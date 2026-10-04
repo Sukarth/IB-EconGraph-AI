@@ -84,6 +84,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             success_url: `${appUrl}/settings?checkout=success`,
             external_customer_id: user.id,
             customer_email: user.email ?? undefined,
+            // Load-bearing, not just a note: Polar ignores external_customer_id
+            // when the email already belongs to a customer (someone who deleted
+            // their account and signed up again), so the webhook and account
+            // deletion identify the user by this instead.
             metadata: { supabase_user_id: user.id },
         });
         return res.status(200).json({ url: checkout.url });
