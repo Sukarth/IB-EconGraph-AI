@@ -54,8 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pull requests get a Claude code review: automatically for the owner's, and
   on request for anyone else's. The Claude workflows can only be invoked by the
   repository owner, run pinned action versions kept current by Dependabot, and
-  read the pull request's diff and CI results without installing or running
-  its code
+  read the pull request's diff without installing or running its code; an
+  on-request review can also read the CI results
 - Repository images were losslessly optimized, and the social card renderer
   rejects a `CHROME_PATH` that cannot be run instead of failing later
 
