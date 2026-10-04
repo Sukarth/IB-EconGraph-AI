@@ -1,0 +1,41 @@
+name: CI
+
+# Typecheck and production build on every PR and on main. Deliberately has no
+# secrets and a read-only token: it runs whatever code the PR contains,
+# including dependency install scripts, so it must have nothing worth stealing.
+# The Claude workflows read these results instead of building themselves.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to the same PR or branch supersedes a run still going on the old one.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          # Matches Vercel and local; package.json requires 22+.
+          node-version: '24'
+          cache: 'npm'
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      # Also generates the SEO pages and fails if a social card or route is
+      # missing, which `vite build` alone would not catch.
+      - name: Build
+        run: npm run build
