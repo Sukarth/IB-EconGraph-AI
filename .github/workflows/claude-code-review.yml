@@ -10,13 +10,20 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+# A new push to the same PR supersedes a review still running on the old head.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Automatic reviews only for PRs the repository owner opens, and not while
+    # they are drafts (marking one ready for review triggers it). Anyone else's
+    # PR is reviewed only when the owner asks with an @claude comment, which
+    # claude.yml handles.
+    if: |
+      github.event.pull_request.user.login == github.repository_owner &&
+      github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
     permissions:
