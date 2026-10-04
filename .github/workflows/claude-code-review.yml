@@ -20,9 +20,11 @@ jobs:
     # Automatic reviews only for PRs the repository owner opens, and not while
     # they are drafts (marking one ready for review triggers it). Anyone else's
     # PR is reviewed only when the owner asks with an @claude comment, which
-    # claude.yml handles.
+    # claude.yml handles. A PR from a fork gets no secrets on `pull_request`, so
+    # it would only fail; those go through @claude too.
     if: |
       github.event.pull_request.user.login == github.repository_owner &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false
 
     runs-on: ubuntu-latest
@@ -34,13 +36,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        # Pinned to a commit: this step holds CLAUDE_CODE_OAUTH_TOKEN, so a
+        # moved tag must not change what runs. Dependabot proposes updates.
+        uses: anthropics/claude-code-action@cab360f6565aa35a51d6ce9e43f1f4287c0a32ea # v1.0.241
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
