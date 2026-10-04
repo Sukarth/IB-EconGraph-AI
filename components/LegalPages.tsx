@@ -3,7 +3,10 @@ import { CONTACT_EMAIL } from '../services/contact';
 
 const SITE = 'https://ib-econgraph-ai.vercel.app';
 const REPO = 'https://github.com/sukarth/IB-EconGraph-AI';
-const LAST_UPDATED = '19 July 2026';
+// One date per page: each promises that changes show in its own "last updated"
+// line, so editing one page must not move the other's date.
+const PRIVACY_UPDATED = '19 July 2026';
+const TERMS_UPDATED = '3 October 2026';
 
 /** Inline chevron used in place of a literal arrow character in nav breadcrumbs. */
 const Arrow: React.FC = () => (
@@ -16,7 +19,7 @@ const Arrow: React.FC = () => (
     </svg>
 );
 
-const LegalLayout: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+const LegalLayout: React.FC<{ title: string; updated: string; children: React.ReactNode }> = ({ title, updated, children }) => (
     <div className="min-h-screen bg-white text-gray-700">
         <nav className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-slate-100">
             <div className="max-w-3xl mx-auto px-6 py-4 flex items-center justify-between">
@@ -36,7 +39,7 @@ const LegalLayout: React.FC<{ title: string; children: React.ReactNode }> = ({ t
             <h1 className="text-3xl md:text-4xl font-bold text-gray-900 tracking-tight mb-2">{title}</h1>
             {/* gray-500 rather than gray-400: gray-400 on white is 2.5:1, under
                 WCAG AA's 4.5:1 minimum for normal-size text. */}
-            <p className="text-sm text-gray-500 mb-10">Last updated: {LAST_UPDATED}</p>
+            <p className="text-sm text-gray-500 mb-10">Last updated: {updated}</p>
             <div className="space-y-8 leading-relaxed">{children}</div>
             <footer className="mt-16 pt-8 border-t border-slate-100 text-sm text-gray-500 flex flex-wrap gap-x-6 gap-y-2">
                 <a href="/" className="hover:text-gray-700">Home</a>
@@ -59,7 +62,7 @@ const LI: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 export const PrivacyPage: React.FC = () => (
-    <LegalLayout title="Privacy Policy">
+    <LegalLayout title="Privacy Policy" updated={PRIVACY_UPDATED}>
         <section>
             <P>
                 IB EconGraph AI ("the Service", "we", "us") is a free, open-source diagram editor for
@@ -161,7 +164,7 @@ export const PrivacyPage: React.FC = () => (
 );
 
 export const TermsPage: React.FC = () => (
-    <LegalLayout title="Terms of Service">
+    <LegalLayout title="Terms of Service" updated={TERMS_UPDATED}>
         <section>
             <P>
                 These terms govern your use of IB EconGraph AI ("the Service"). By using the Service you agree to
