@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-10-04
+
+### Fixed
+
+- **A returning customer could pay and never become a Supporter.** Polar
+  matches a checkout to an existing customer by email, and a customer's
+  external id can never change. So someone who deleted their account and
+  signed up again with the same email paid as their old customer, still
+  carrying the deleted account's id: the payment was accepted, no account was
+  upgraded, and the checkout screen waited forever. The same mix-up sent
+  "Manage billing" to "No billing account found", and let account deletion
+  miss the subscription, which would have kept charging a deleted account.
+  Subscribers are now identified by the account that started the checkout,
+  billing opens by the stored customer, and deletion looks a subscription up
+  three ways and cancels only the ones that belong to the deleting user
+- **Deleting an account now cancels a paused subscription.** A paused
+  subscription grants no access but resumes and bills on its own, and deletion
+  used to skip it. Pause and resume are now applied as they happen, paused
+  subscribers can reach "Manage billing", and a paused subscriber is pointed at
+  resuming rather than starting a second subscription
+- The account deletion warning now appears for every subscription that can
+  still charge (including unpaid, incomplete and lapsed ones), not only for
+  active Supporters
+
+### Changed
+
+- **Account deletion moved into a confirmation dialog.** The danger zone is
+  now one short row; the dialog explains what is deleted in a single message,
+  says plainly that deletion ends a subscription immediately without refunding
+  time already paid for (except where the law requires it), and asks you to
+  type "delete my account" before it will proceed
+- **Dialogs are accessible.** Every dialog is announced as a dialog with its
+  title, keeps keyboard focus inside while open, closes on Escape, and returns
+  focus to whatever opened it. A confirmation opened from inside another
+  dialog closes on its own, and the overlay now covers the whole page
+- The Terms of Service say that deleting an account does not by itself refund
+  time already paid for. The Terms now carry their own "last updated" date,
+  separate from the Privacy Policy's
+- Billing moved to Polar's versioned API (2026-10) and its 1.x SDK, ahead of
+  Polar retiring the previous API version in January 2027
+- Node.js 22 or later is required to build the project
+
+### Development
+
+- Continuous integration typechecks and builds every pull request, with no
+  secrets available to the run
+- Pull requests get a Claude code review: automatically for the owner's, and
+  on request for anyone else's. The Claude workflows can only be invoked by the
+  repository owner, run pinned action versions kept current by Dependabot, and
+  read the pull request's diff without installing or running its code; an
+  on-request review can also read the CI results
+- Repository images were losslessly optimized, and the social card renderer
+  rejects a `CHROME_PATH` that cannot be run instead of failing later
+
 ## [1.1.2] - 2026-07-29
 
 ### Added
@@ -140,6 +194,7 @@ locally, which is how 1.1.0 shipped with them: neither the dev server nor
 - Box select and eraser tools
 - Pan and zoom controls
 
+[1.1.3]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.3
 [1.1.2]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.2
 [1.1.1]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.1
 [1.1.0]: https://github.com/sukarth/IB-EconGraph-AI/releases/tag/v1.1.0

@@ -36,9 +36,11 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          # Full history, so a review can diff the PR against main instead of
+          # reading the branch's files with nothing to compare them to.
+          fetch-depth: 0
 
       - name: Run Claude Code
         id: claude
@@ -52,11 +54,21 @@ jobs:
           additional_permissions: |
             actions: read
 
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
-
-          # Optional: Add claude_args to customize behavior and configuration
+          # On top of the action's defaults (read files, git add/commit/push):
+          # read-only git and gh, so Claude can see what a PR changes. For a PR
+          # the action checks out its branch, unshallowed because of
+          # fetch-depth: 0 above, so `git diff origin/main...HEAD` works.
+          #
+          # Nothing that installs or runs the project: on someone else's PR that
+          # would execute their code (install scripts, Vite and TypeScript
+          # config) on a runner holding CLAUDE_CODE_OAUTH_TOKEN. Typecheck and
+          # build run in ci.yml instead, with no secrets, and Claude can read
+          # those results. Deliberately no `git fetch` either: its
+          # --upload-pack option runs an arbitrary command, which a prompt
+          # injected through a PR could ask for.
+          claude_args: >-
+            --allowedTools
+            "Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(git status:*),Bash(git branch:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr checks:*)"
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
 
