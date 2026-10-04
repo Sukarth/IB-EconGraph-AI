@@ -95,6 +95,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // costs nothing.
         for (const query of queries) {
             for await (const sub of getPolar().subscriptions.iterList(query)) {
+                // A shared Polar customer can hold another account's
+                // subscription too: if account A changes its email and a new
+                // account B signs up with A's old one, B's checkout lands on A's
+                // customer. Never cancel a subscription the checkout says
+                // belongs to someone else. One with no owner recorded (made
+                // before the metadata existed) is still cancelled, because a
+                // missed one keeps charging.
+                const owner = sub.metadata?.supabase_user_id;
+                if (typeof owner === 'string' && owner && owner !== user.id) continue;
                 if (CAN_STILL_CHARGE[sub.status] ?? true) ids.add(sub.id);
             }
         }
