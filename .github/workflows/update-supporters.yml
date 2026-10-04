@@ -22,13 +22,15 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to commits: this job holds SUPABASE_SECRET_KEY (full database
+      # access) and a contents:write token. Dependabot proposes updates.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Don't leave a contents:write token in .git/config while `npm ci`
           # runs arbitrary dependency install scripts. The push below passes
           # the token explicitly instead.
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # supabase-js needs 22+ for native WebSocket: on 20 createClient throws
           # before it can query. 24 matches Vercel and local.
