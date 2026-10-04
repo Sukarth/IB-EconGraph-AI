@@ -90,9 +90,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // A's customer. Never cancel a subscription the checkout says belongs to
     // someone else. One with no owner recorded (made before the metadata
     // existed) is still cancelled, because a missed one keeps charging.
-    const shouldCancel = (sub: Pick<models.Subscription, 'status' | 'metadata'>) => {
+    //
+    // It must also be tied to this user by one of the identities looked up
+    // above, checked here rather than trusted from the list filter. If Polar
+    // ever ignored a filter, the list would be every subscription in the org,
+    // and the no-owner rule would then cancel other people's older ones.
+    const shouldCancel = (
+        sub: Pick<models.Subscription, 'status' | 'metadata' | 'customer_id'> & {
+            customer?: Pick<models.Subscription['customer'], 'external_id'> | null;
+        },
+    ) => {
         const owner = sub.metadata?.supabase_user_id;
         if (typeof owner === 'string' && owner && owner !== user.id) return false;
+        const tiedToUser =
+            owner === user.id ||
+            sub.customer?.external_id === user.id ||
+            (!!profile?.polar_customer_id && sub.customer_id === profile.polar_customer_id);
+        if (!tiedToUser) return false;
         return CAN_STILL_CHARGE[sub.status] ?? true;
     };
 
